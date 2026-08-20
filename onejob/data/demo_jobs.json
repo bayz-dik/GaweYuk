@@ -1,0 +1,72 @@
+[
+  {
+    "source": "LinkedIn",
+    "external_id": "li-1001",
+    "title": "Production Operator",
+    "company": "PT Example Manufacturing",
+    "location": "Bekasi, Jawa Barat",
+    "description": "Operate production machines, inspect product quality, follow K3 and production targets.",
+    "salary_min": 6000000,
+    "salary_max": 6800000,
+    "skills": ["machine operation", "quality inspection", "k3"],
+    "apply_url": "https://linkedin.example/jobs/1001",
+    "official_source": false,
+    "contact_email": "recruitment@examplemanufacturing.co.id"
+  },
+  {
+    "source": "Company Career",
+    "external_id": "co-1001",
+    "title": "Operator Production",
+    "company": "Example Manufacturing",
+    "location": "Bekasi Jawa Barat",
+    "description": "Operate production machines, inspect product quality, follow K3 and production targets every shift.",
+    "salary_min": 6100000,
+    "salary_max": 6900000,
+    "skills": ["machine operation", "quality inspection", "k3"],
+    "apply_url": "https://careers.examplemanufacturing.co.id/jobs/1001",
+    "official_source": true,
+    "contact_email": "recruitment@examplemanufacturing.co.id"
+  },
+  {
+    "source": "JobStreet",
+    "external_id": "js-2001",
+    "title": "Quality Operator",
+    "company": "PT Prima Quality",
+    "location": "Cikarang",
+    "description": "Perform visual quality inspection and operate measurement tools. Forklift is not required.",
+    "salary_min": 5700000,
+    "salary_max": 6500000,
+    "skills": ["quality inspection", "machine operation"],
+    "apply_url": "https://jobstreet.example/2001",
+    "official_source": false,
+    "contact_email": "hr@primaquality.co.id"
+  },
+  {
+    "source": "Indeed",
+    "external_id": "in-3001",
+    "title": "Warehouse Staff",
+    "company": "PT Logistic Example",
+    "location": "Bekasi",
+    "description": "Handle inventory, stock movement, FIFO and warehouse administration.",
+    "salary_min": 4800000,
+    "salary_max": 5200000,
+    "skills": ["inventory", "administration"],
+    "apply_url": "https://indeed.example/3001",
+    "official_source": false,
+    "contact_email": "jobs@logisticexample.co.id"
+  },
+  {
+    "source": "Unknown Telegram",
+    "external_id": "tg-9001",
+    "title": "Admin Online",
+    "company": "PT Mega Digital Indonesia",
+    "location": "Remote",
+    "description": "Langsung kerja tanpa interview. Transfer biaya administrasi Rp250.000 untuk aktivasi data kandidat.",
+    "salary_min": 15000000,
+    "salary_max": 25000000,
+    "skills": ["administration"],
+    "apply_url": "https://mega-career-fast.example/apply",
+    "official_source": false,
+    "contact_email": "megadigital.jobs@gmail.com"
+  }
+]

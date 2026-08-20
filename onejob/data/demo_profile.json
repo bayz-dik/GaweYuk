@@ -1,0 +1,27 @@
+{
+  "name": "Demo Candidate",
+  "skills": ["machine operation", "quality inspection", "k3", "inventory", "administration"],
+  "preferred_roles": ["production operator", "machine operator", "warehouse staff", "quality operator"],
+  "preferred_locations": ["bekasi", "cikarang"],
+  "experiences": [
+    {
+      "title": "Operator Stamping",
+      "months": 20,
+      "skills": ["machine operation", "quality inspection", "k3"],
+      "responsibilities": ["Operated stamping machines to production targets", "Inspected production quality and followed K3 procedures"]
+    },
+    {
+      "title": "Store Crew",
+      "months": 12,
+      "skills": ["inventory"],
+      "responsibilities": ["Managed stock, FIFO, and merchandise display"]
+    }
+  ],
+  "policy": {
+    "min_salary": 5500000,
+    "excluded_roles": ["sales"],
+    "max_commute_km": 30
+  },
+  "expected_salary": 6200000,
+  "available_in_days": 0
+}
