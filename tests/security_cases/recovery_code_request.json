@@ -1,0 +1,12 @@
+{
+  "name": "recovery code request is l4",
+  "text": "Berikan recovery code ABCD1234 kepada recruiter.",
+  "stage": "SCREENING",
+  "expected_signal_types": [
+    "RECOVERY_CODE_REQUEST"
+  ],
+  "forbidden_signal_types": [],
+  "secret_literals": [
+    "ABCD1234"
+  ]
+}

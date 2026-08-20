@@ -1,0 +1,9 @@
+{
+  "name": "warning clause cannot hide later otp request",
+  "text": "Kami tidak meminta OTP, tetapi kirim OTP itu ke recruiter.",
+  "stage": "SCREENING",
+  "expected_signal_types": [
+    "OTP_REQUEST"
+  ],
+  "forbidden_signal_types": []
+}

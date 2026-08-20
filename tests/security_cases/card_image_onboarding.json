@@ -1,0 +1,9 @@
+{
+  "name": "card image stays dangerous during onboarding",
+  "text": "Kirim foto kartu ATM bagian depan untuk verifikasi.",
+  "stage": "ONBOARDING",
+  "expected_signal_types": [
+    "CARD_IMAGE_REQUEST"
+  ],
+  "forbidden_signal_types": []
+}

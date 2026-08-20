@@ -1,0 +1,9 @@
+{
+  "name": "finance job deposit terminology is not recruitment payment",
+  "text": "Handle customer deposit reconciliation and prepare bank transfer reports for finance operations.",
+  "stage": "DISCOVERY",
+  "expected_signal_types": [],
+  "forbidden_signal_types": [
+    "RECRUITMENT_PAYMENT"
+  ]
+}

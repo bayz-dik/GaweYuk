@@ -21,6 +21,7 @@ EARLY_SENSITIVE_STAGES = frozenset(
         RecruitmentStage.APPLICATION,
         RecruitmentStage.SCREENING,
         RecruitmentStage.INTERVIEW,
+        RecruitmentStage.OFFER,
         RecruitmentStage.UNKNOWN,
     }
 )
@@ -29,7 +30,7 @@ EARLY_SENSITIVE_STAGES = frozenset(
 NEGATION_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
-        r"\b(?:tidak|tak)\s+pernah\s+"
+        r"\b(?:tidak|tak)\s+(?:pernah\s+)?"
         r"(?:meminta|memerlukan|membutuhkan)\b",
         r"\bjangan\s+(?:pernah\s+)?"
         r"(?:kirim|berikan|bagikan|share)\b",
@@ -210,6 +211,28 @@ def _sentences(text: str) -> list[str]:
     ]
 
 
+def _is_technical_context(sentence: str) -> bool:
+    directive = re.search(
+        r"\b(?:please|silakan|harap|mohon|kirim|kirimkan|dikirim|berikan|bagikan|send|share|provide|upload|unggah|masukkan|submit|bayar|setor|wajib|harus|must|required)\b",
+        sentence,
+        re.IGNORECASE,
+    )
+    if directive:
+        return False
+
+    patterns = (
+        r"\bexperience\b.{0,80}\b(?:building|developing|implementing)\b",
+        r"\bknowledge\s+of\b",
+        r"\b(?:validation|verification|reset)\s+(?:algorithms?|systems?)\b",
+        r"\breconciliation\b",
+        r"\b(?:reports?|reporting)\b.{0,50}\b(?:finance|operations?)\b",
+    )
+    return any(
+        re.search(pattern, sentence, re.IGNORECASE)
+        for pattern in patterns
+    )
+
+
 def _is_negated(sentence: str) -> bool:
     return any(
         pattern.search(sentence)
@@ -259,6 +282,96 @@ def _make_signal(
     )
 
 
+
+CONTRAST_SPLIT_RE = re.compile(
+    r"\s*(?:;|\b(?:tetapi|namun|akan\s+tetapi|but|however)\b)\s*",
+    re.IGNORECASE,
+)
+
+REQUEST_ACTION_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\b(?:kirim(?:kan)?|dikirim|berikan|diberikan|beri|bagikan)\b",
+        r"\b(?:share|send|give|provide|forward|tell)\b",
+        r"\b(?:masukkan|input|enter|upload|unggah|submit|sampaikan)\b",
+        r"\b(?:bayar|transfer)\b",
+    )
+)
+
+PAYMENT_RECRUITMENT_CONTEXT_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\b(?:interview|screening|seleksi|rekrutmen|recruitment)\b",
+        r"\b(?:lamaran|application|kandidat|candidate|recruiter)\b",
+        r"\b(?:training|onboarding|administrasi|admin)\b",
+    )
+)
+
+EXPLICIT_RECRUITMENT_FEE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bbiaya\s+(?:administrasi|admin|rekrutmen|training)\b",
+        r"\b(?:application|recruitment|training)\s+fee\b",
+        r"\bdeposit\s+training\b",
+        r"\buang\s+komitmen\b",
+        r"\bjaminan\s+training\b",
+    )
+)
+
+
+def _clauses(sentence: str) -> list[str]:
+    return [
+        part.strip(" ,")
+        for part in CONTRAST_SPLIT_RE.split(sentence)
+        if part.strip(" ,")
+    ]
+
+
+def _has_request_action(text: str) -> bool:
+    return any(
+        pattern.search(text)
+        for pattern in REQUEST_ACTION_PATTERNS
+    )
+
+
+def _is_recruitment_payment_request(text: str) -> bool:
+    if not _matches(text, PAYMENT_PATTERNS):
+        return False
+
+    if _has_request_action(text):
+        return True
+
+    if _matches(text, EXPLICIT_RECRUITMENT_FEE_PATTERNS):
+        return True
+
+    has_amount = re.search(
+        r"\b(?:rp|idr)\s*[\d.,]+",
+        text,
+        re.IGNORECASE,
+    )
+
+    has_recruitment_context = _matches(
+        text,
+        PAYMENT_RECRUITMENT_CONTEXT_PATTERNS,
+    )
+
+    return bool(has_amount and has_recruitment_context)
+
+
+def _is_sensitive_request(
+    text: str,
+    patterns: tuple[re.Pattern[str], ...],
+) -> bool:
+    if not _matches(text, patterns):
+        return False
+
+    if _has_request_action(text):
+        return True
+
+    return SECRET_VALUE_PATTERN.search(text) is not None
+
+
+
 def extract_deterministic_signals(
     *,
     canonical_job_id: str,
@@ -270,86 +383,48 @@ def extract_deterministic_signals(
     detected: dict[str, SignalLevel] = {}
 
     for sentence in _sentences(text):
-        if _is_negated(sentence):
+        if _is_technical_context(sentence):
             continue
+        for clause in _clauses(sentence):
+            if _is_negated(clause):
+                continue
 
-        if _matches(
-            sentence,
-            PAYMENT_PATTERNS,
-        ):
-            detected[
-                "RECRUITMENT_PAYMENT"
-            ] = SignalLevel.L3
+            if _is_recruitment_payment_request(clause):
+                detected["RECRUITMENT_PAYMENT"] = SignalLevel.L3
 
-        if _matches(
-            sentence,
-            OTP_PATTERNS,
-        ):
-            detected[
-                "OTP_REQUEST"
-            ] = SignalLevel.L4
+            if _is_sensitive_request(clause, OTP_PATTERNS):
+                detected["OTP_REQUEST"] = SignalLevel.L4
 
-        if _matches(
-            sentence,
-            PIN_PATTERNS,
-        ):
-            detected[
-                "PIN_REQUEST"
-            ] = SignalLevel.L4
+            if _is_sensitive_request(clause, PIN_PATTERNS):
+                detected["PIN_REQUEST"] = SignalLevel.L4
 
-        if _matches(
-            sentence,
-            PASSWORD_PATTERNS,
-        ):
-            detected[
-                "PASSWORD_REQUEST"
-            ] = SignalLevel.L4
+            if _is_sensitive_request(clause, PASSWORD_PATTERNS):
+                detected["PASSWORD_REQUEST"] = SignalLevel.L4
 
-        if _matches(
-            sentence,
-            RECOVERY_CODE_PATTERNS,
-        ):
-            detected[
-                "RECOVERY_CODE_REQUEST"
-            ] = SignalLevel.L4
+            if _is_sensitive_request(clause, RECOVERY_CODE_PATTERNS):
+                detected["RECOVERY_CODE_REQUEST"] = SignalLevel.L4
 
-        if _matches(
-            sentence,
-            AUTH_SECRET_PATTERNS,
-        ):
-            detected[
-                "AUTHENTICATION_SECRET_REQUEST"
-            ] = SignalLevel.L4
+            if _is_sensitive_request(clause, AUTH_SECRET_PATTERNS):
+                detected[
+                    "AUTHENTICATION_SECRET_REQUEST"
+                ] = SignalLevel.L4
 
-        if (
-            stage in EARLY_SENSITIVE_STAGES
-            and _matches(
-                sentence,
-                IDENTITY_DOCUMENT_PATTERNS,
-            )
-        ):
-            detected[
-                "EARLY_IDENTITY_DOCUMENT"
-            ] = SignalLevel.L3
+            if (
+                stage in EARLY_SENSITIVE_STAGES
+                and _matches(clause, IDENTITY_DOCUMENT_PATTERNS)
+            ):
+                detected[
+                    "EARLY_IDENTITY_DOCUMENT"
+                ] = SignalLevel.L3
 
-        if (
-            stage in EARLY_SENSITIVE_STAGES
-            and _matches(
-                sentence,
-                BANK_DATA_PATTERNS,
-            )
-        ):
-            detected[
-                "EARLY_BANK_DATA"
-            ] = SignalLevel.L3
+            if (
+                stage in EARLY_SENSITIVE_STAGES
+                and _matches(clause, BANK_DATA_PATTERNS)
+            ):
+                detected["EARLY_BANK_DATA"] = SignalLevel.L3
 
-        if _matches(
-            sentence,
-            CARD_IMAGE_PATTERNS,
-        ):
-            detected[
-                "CARD_IMAGE_REQUEST"
-            ] = SignalLevel.L3
+            if _matches(clause, CARD_IMAGE_PATTERNS):
+                detected["CARD_IMAGE_REQUEST"] = SignalLevel.L3
 
     return [
         _make_signal(
@@ -360,7 +435,5 @@ def extract_deterministic_signals(
             evidence_ref=evidence_ref,
             observed_at=observed_at,
         )
-        for signal_type, level in sorted(
-            detected.items()
-        )
+        for signal_type, level in sorted(detected.items())
     ]

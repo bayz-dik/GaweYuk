@@ -1,0 +1,9 @@
+{
+  "name": "bank data at offer stage is still early",
+  "text": "Masukkan nomor rekening bank saat tahap offer.",
+  "stage": "OFFER",
+  "expected_signal_types": [
+    "EARLY_BANK_DATA"
+  ],
+  "forbidden_signal_types": []
+}

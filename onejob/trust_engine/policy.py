@@ -6,6 +6,7 @@ import hashlib
 from typing import Mapping, Sequence
 
 from .models import (
+    DetectionMethod,
     DimensionScore,
     DimensionState,
     GateHit,
@@ -115,6 +116,7 @@ def _override_policy(
     return "NONE"
 
 
+
 def _active_gates(
     signals: Sequence[TrustSignal],
 ) -> tuple[GateHit, ...]:
@@ -122,22 +124,29 @@ def _active_gates(
     result = []
 
     for signal in signals:
-
         if signal.status is not SignalStatus.ACTIVE:
             continue
 
         if signal.level is SignalLevel.L1:
             continue
 
+        if (
+            signal.detection_method is DetectionMethod.AI
+            and signal.level in {SignalLevel.L3, SignalLevel.L4}
+        ):
+            effect = TrustClassification.REVIEW_REQUIRED
+            override_policy = "REQUIRES_CORROBORATION"
+        else:
+            effect = _gate_effect(signal.level)
+            override_policy = _override_policy(signal.level)
+
         result.append(
             GateHit(
                 signal_id=signal.signal_id,
                 gate_code=signal.signal_type,
                 level=signal.level,
-                effect=_gate_effect(signal.level),
-                override_policy=_override_policy(
-                    signal.level
-                ),
+                effect=effect,
+                override_policy=override_policy,
             )
         )
 
@@ -420,6 +429,7 @@ def _evaluation_id(
     return f"eval-{digest[:24]}"
 
 
+
 def evaluate_policy(
     *,
     canonical_job_id: str,
@@ -439,50 +449,35 @@ def evaluate_policy(
 
     gates = _active_gates(signals)
 
-    l4 = tuple(
+    absolute_gates = tuple(
         gate
         for gate in gates
-        if gate.level is SignalLevel.L4
+        if gate.effect is TrustClassification.ABSOLUTE_BLOCK
     )
 
-    l3 = tuple(
+    automation_gates = tuple(
         gate
         for gate in gates
-        if gate.level is SignalLevel.L3
+        if gate.effect is TrustClassification.AUTOMATION_BLOCKED
     )
 
-    l2 = tuple(
+    review_gates = tuple(
         gate
         for gate in gates
-        if gate.level is SignalLevel.L2
+        if gate.effect is TrustClassification.REVIEW_REQUIRED
     )
 
-    if l4:
-        classification = (
-            TrustClassification.ABSOLUTE_BLOCK
-        )
-        reasons = tuple(
-            gate.gate_code
-            for gate in l4
-        )
+    if absolute_gates:
+        classification = TrustClassification.ABSOLUTE_BLOCK
+        reasons = tuple(gate.gate_code for gate in absolute_gates)
 
-    elif l3:
-        classification = (
-            TrustClassification.AUTOMATION_BLOCKED
-        )
-        reasons = tuple(
-            gate.gate_code
-            for gate in l3
-        )
+    elif automation_gates:
+        classification = TrustClassification.AUTOMATION_BLOCKED
+        reasons = tuple(gate.gate_code for gate in automation_gates)
 
-    elif l2:
-        classification = (
-            TrustClassification.REVIEW_REQUIRED
-        )
-        reasons = tuple(
-            gate.gate_code
-            for gate in l2
-        )
+    elif review_gates:
+        classification = TrustClassification.REVIEW_REQUIRED
+        reasons = tuple(gate.gate_code for gate in review_gates)
 
     else:
         classification, reasons = _classify_scores(
@@ -494,20 +489,22 @@ def evaluate_policy(
             policy=policy,
         )
 
-    unknown, not_applicable = (
-        _dimension_state_sets(dimensions)
-    )
+    unknown, not_applicable = _dimension_state_sets(dimensions)
 
-    allowed, blocked, override = _actions_for(
-        classification
-    )
+    allowed, blocked, override = _actions_for(classification)
 
-    if l4:
+    if absolute_gates:
         override = "NONE"
-    elif l3:
+    elif automation_gates:
         override = "MANUAL_ONLY"
-    elif l2:
-        override = "REVIEW_ACKNOWLEDGEMENT"
+    elif review_gates:
+        if any(
+            gate.override_policy == "REQUIRES_CORROBORATION"
+            for gate in review_gates
+        ):
+            override = "REQUIRES_CORROBORATION"
+        else:
+            override = "REVIEW_ACKNOWLEDGEMENT"
 
     evidence_refs = tuple(
         sorted(

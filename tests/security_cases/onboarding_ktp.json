@@ -1,0 +1,9 @@
+{
+  "name": "onboarding identity document is not early identity signal",
+  "text": "Upload KTP untuk proses onboarding resmi.",
+  "stage": "ONBOARDING",
+  "expected_signal_types": [],
+  "forbidden_signal_types": [
+    "EARLY_IDENTITY_DOCUMENT"
+  ]
+}
