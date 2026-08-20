@@ -1,0 +1,9 @@
+{
+  "name": "identity document at offer stage is still early",
+  "text": "Upload KTP sekarang untuk melanjutkan proses offer.",
+  "stage": "OFFER",
+  "expected_signal_types": [
+    "EARLY_IDENTITY_DOCUMENT"
+  ],
+  "forbidden_signal_types": []
+}

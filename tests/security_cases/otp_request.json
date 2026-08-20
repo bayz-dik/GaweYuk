@@ -1,0 +1,7 @@
+{
+  "name": "otp request",
+  "text": "Kirim OTP 123456 ke recruiter untuk verifikasi.",
+  "stage": "SCREENING",
+  "expected_signal_types": ["OTP_REQUEST"],
+  "forbidden_signal_types": []
+}

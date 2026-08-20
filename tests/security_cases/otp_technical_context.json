@@ -1,0 +1,10 @@
+{
+  "name": "technical otp and password context is not secret request",
+  "text": "Experience building OTP verification and password reset systems for mobile applications.",
+  "stage": "DISCOVERY",
+  "expected_signal_types": [],
+  "forbidden_signal_types": [
+    "OTP_REQUEST",
+    "PASSWORD_REQUEST"
+  ]
+}

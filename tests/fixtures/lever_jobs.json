@@ -1,0 +1,21 @@
+[
+  {
+    "id": "lever-1001",
+    "text": "Production Operator",
+    "createdAt": 1787212800000,
+    "updatedAt": 1787216400000,
+    "hostedUrl": "https://jobs.lever.co/example/lever-1001",
+    "categories": {
+      "team": "Manufacturing",
+      "department": "Operations",
+      "location": "Bekasi, Indonesia",
+      "commitment": "Full-time"
+    },
+    "content": {
+      "description": "Operate production machines safely.",
+      "descriptionHtml": "<div>Operate production machines safely.</div>",
+      "lists": []
+    },
+    "workplaceType": "onsite"
+  }
+]

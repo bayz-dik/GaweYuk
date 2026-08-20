@@ -1,0 +1,9 @@
+{
+  "name": "onboarding bank data is not early bank signal",
+  "text": "Masukkan nomor rekening bank untuk payroll onboarding.",
+  "stage": "ONBOARDING",
+  "expected_signal_types": [],
+  "forbidden_signal_types": [
+    "EARLY_BANK_DATA"
+  ]
+}

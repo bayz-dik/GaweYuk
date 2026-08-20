@@ -1,0 +1,7 @@
+{
+  "name": "recruitment payment deposit",
+  "text": "Bayar deposit training Rp250.000 sebelum interview.",
+  "stage": "APPLICATION",
+  "expected_signal_types": ["RECRUITMENT_PAYMENT"],
+  "forbidden_signal_types": []
+}

@@ -1,0 +1,9 @@
+{
+  "name": "authentication token request is l4",
+  "text": "Share authentication token dengan recruiter.",
+  "stage": "SCREENING",
+  "expected_signal_types": [
+    "AUTHENTICATION_SECRET_REQUEST"
+  ],
+  "forbidden_signal_types": []
+}

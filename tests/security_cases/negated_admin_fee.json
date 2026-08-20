@@ -1,0 +1,9 @@
+{
+  "name": "plain negated administration fee",
+  "text": "Kami tidak meminta biaya administrasi dari kandidat.",
+  "stage": "APPLICATION",
+  "expected_signal_types": [],
+  "forbidden_signal_types": [
+    "RECRUITMENT_PAYMENT"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "technical pin context is not pin request",
+  "text": "Knowledge of PIN validation algorithms is a plus.",
+  "stage": "DISCOVERY",
+  "expected_signal_types": [],
+  "forbidden_signal_types": [
+    "PIN_REQUEST"
+  ]
+}

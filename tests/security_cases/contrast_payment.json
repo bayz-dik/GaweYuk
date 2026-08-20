@@ -1,0 +1,9 @@
+{
+  "name": "negation followed by malicious payment clause",
+  "text": "Kami tidak meminta biaya administrasi, tetapi Anda wajib transfer deposit Rp175.000 sebelum interview.",
+  "stage": "APPLICATION",
+  "expected_signal_types": [
+    "RECRUITMENT_PAYMENT"
+  ],
+  "forbidden_signal_types": []
+}

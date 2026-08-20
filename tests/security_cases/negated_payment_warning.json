@@ -1,0 +1,7 @@
+{
+  "name": "legitimate no payment warning",
+  "text": "Kami tidak pernah meminta biaya atau deposit apa pun.",
+  "stage": "APPLICATION",
+  "expected_signal_types": [],
+  "forbidden_signal_types": ["RECRUITMENT_PAYMENT"]
+}
