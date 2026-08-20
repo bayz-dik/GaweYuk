@@ -1,0 +1,16 @@
+{
+  "jobs": [
+    {
+      "id": "ashby-1001",
+      "title": "Production Operator",
+      "location": "Bekasi, Indonesia",
+      "descriptionPlain": "Operate production machines safely.",
+      "descriptionHtml": "<p>Operate production machines safely.</p>",
+      "publishedAt": "2026-08-20T08:30:00Z",
+      "employmentType": "FullTime",
+      "jobUrl": "https://jobs.ashbyhq.com/example/ashby-1001",
+      "applyUrl": "https://jobs.ashbyhq.com/example/ashby-1001/application",
+      "isListed": true
+    }
+  ]
+}

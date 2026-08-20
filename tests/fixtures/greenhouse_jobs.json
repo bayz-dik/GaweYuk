@@ -1,0 +1,14 @@
+{
+  "jobs": [
+    {
+      "id": 1001,
+      "title": "Production Operator",
+      "absolute_url": "https://boards.greenhouse.io/example/jobs/1001",
+      "updated_at": "2026-08-20T08:30:00Z",
+      "location": {
+        "name": "Bekasi, Indonesia"
+      },
+      "content": "<p>Operate production machines safely.</p>"
+    }
+  ]
+}
