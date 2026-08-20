@@ -1,0 +1,7 @@
+{
+  "name": "early ktp request",
+  "text": "Upload KTP sebelum proses screening dimulai.",
+  "stage": "APPLICATION",
+  "expected_signal_types": ["EARLY_IDENTITY_DOCUMENT"],
+  "forbidden_signal_types": []
+}
