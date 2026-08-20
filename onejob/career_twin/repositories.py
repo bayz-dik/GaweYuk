@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
+from onejob.career_twin.events import CareerEvent
 from onejob.career_twin.models import (
     ApprovalState,
     CareerClaim,
@@ -600,3 +601,52 @@ class ClaimAssessmentRepository:
             return None
 
         return _row_to_claim_assessment(row)
+
+
+class CareerEventRepository:
+    def append_with_outbox(
+        self,
+        conn: sqlite3.Connection,
+        event: CareerEvent,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO career_events (
+                event_id,
+                twin_id,
+                event_type,
+                subject_id,
+                occurred_at,
+                payload_json,
+                causation_id,
+                correlation_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.event_id,
+                event.twin_id,
+                event.event_type,
+                event.subject_id,
+                _encode_datetime(event.occurred_at),
+                json.dumps(
+                    event.payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                event.causation_id,
+                event.correlation_id,
+            ),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO career_event_outbox (
+                event_id,
+                status,
+                attempt_count
+            )
+            VALUES (?, 'PENDING', 0)
+            """,
+            (event.event_id,),
+        )
