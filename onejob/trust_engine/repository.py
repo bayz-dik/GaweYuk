@@ -728,3 +728,75 @@ class TrustRepository:
             ),
             resolution_reason=row["resolution_reason"],
         )
+
+
+def _trust_repo_list_active_signals(
+    self,
+    conn,
+    canonical_job_id: str,
+):
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM trust_signals
+        WHERE
+            canonical_job_id = ?
+            AND status = ?
+        ORDER BY signal_id
+        """,
+        (
+            canonical_job_id,
+            SignalStatus.ACTIVE.value,
+        ),
+    ).fetchall()
+
+    return tuple(
+        self._signal_from_row(row)
+        for row in rows
+    )
+
+
+def _trust_repo_record_attempt(
+    self,
+    conn,
+    *,
+    attempt_id: str,
+    canonical_job_id: str,
+    status: str,
+    error_code: str | None,
+    input_fingerprint: str | None,
+    started_at: datetime,
+    finished_at: datetime,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO trust_evaluation_attempts (
+            attempt_id,
+            canonical_job_id,
+            status,
+            error_code,
+            input_fingerprint,
+            started_at,
+            finished_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            attempt_id,
+            canonical_job_id,
+            status,
+            error_code,
+            input_fingerprint,
+            started_at.isoformat(),
+            finished_at.isoformat(),
+        ),
+    )
+
+
+TrustRepository.list_active_signals = (
+    _trust_repo_list_active_signals
+)
+
+TrustRepository.record_attempt = (
+    _trust_repo_record_attempt
+)

@@ -22,6 +22,7 @@ from onejob.ingestion.lifecycle import (
 from onejob.persistence.repositories import (
     ObservationRepository,
 )
+from onejob.trust_engine.service import TrustEngineService
 
 
 def _normalize(value: str) -> str:
@@ -56,6 +57,7 @@ class IngestionPipeline:
         self.observations = ObservationRepository()
         self.evidence = EvidenceConsensusStore()
         self.conflicts = ConflictExplainabilityStore()
+        self.trust = TrustEngineService(db)
 
     @staticmethod
     def _resolved_data(
@@ -520,6 +522,14 @@ class IngestionPipeline:
                     ),
                 ),
             )
+
+
+        # Trust Engine runs after the ingestion
+        # transaction has committed. Shadow Mode
+        # must never roll back successful ingestion.
+        self.trust.shadow_evaluate_after_ingestion(
+            result.canonical_job_ids
+        )
 
         return result
 
