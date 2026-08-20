@@ -165,6 +165,28 @@ class EvidenceConsensusStore:
 
         return results
 
+
+    def selected_values(
+        self,
+        conn: sqlite3.Connection,
+        canonical_job_id: str,
+    ) -> dict[str, Any]:
+        rows = conn.execute(
+            """
+            SELECT
+                field_name,
+                selected_value_json
+            FROM field_consensus
+            WHERE canonical_job_id = ?
+            """,
+            (canonical_job_id,),
+        ).fetchall()
+
+        return {
+            row[0]: json.loads(row[1])
+            for row in rows
+        }
+
     def resolve_field(
         self,
         conn: sqlite3.Connection,
