@@ -10,7 +10,7 @@ FAIL=0
 
 echo
 echo "[1/4] Pipeline..."
-if python -m pytest tests/test_ingestion_pipeline*.py tests/test_evidence_consensus_store.py tests/test_pipeline_consensus.py -q; then
+if python -m pytest tests/test_ingestion_pipeline*.py tests/test_evidence_consensus_store.py tests/test_pipeline_consensus.py tests/test_conflict_explainability.py -q; then
   echo "Pipeline       PASS"
 else
   echo "Pipeline       FAIL"

@@ -148,3 +148,28 @@ CREATE TABLE IF NOT EXISTS collection_runs (
   warnings_count INTEGER NOT NULL DEFAULT 0,
   error_summary TEXT
 );
+
+CREATE TABLE IF NOT EXISTS field_conflict_records (
+    conflict_id TEXT PRIMARY KEY,
+    canonical_job_id TEXT NOT NULL,
+    field_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    selected_value_json TEXT,
+    confidence REAL NOT NULL,
+    primary_evidence_ids_json TEXT NOT NULL,
+    conflicting_evidence_ids_json TEXT NOT NULL,
+    resolution_reason TEXT,
+    detected_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    resolved_at TEXT,
+    UNIQUE(canonical_job_id, field_name),
+    FOREIGN KEY(canonical_job_id)
+        REFERENCES canonical_jobs(canonical_job_id)
+);
+
+CREATE INDEX IF NOT EXISTS
+idx_field_conflict_records_job_status
+ON field_conflict_records(
+    canonical_job_id,
+    status
+);

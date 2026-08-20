@@ -8,6 +8,9 @@ from typing import Any
 from onejob.ingestion.evidence_store import (
     EvidenceConsensusStore,
 )
+from onejob.ingestion.explainability import (
+    ConflictExplainabilityStore,
+)
 from onejob.ingestion.identity import (
     company_id_for,
     job_identity_key,
@@ -52,6 +55,7 @@ class IngestionPipeline:
         self.db = db
         self.observations = ObservationRepository()
         self.evidence = EvidenceConsensusStore()
+        self.conflicts = ConflictExplainabilityStore()
 
     @staticmethod
     def _resolved_data(
@@ -318,10 +322,19 @@ class IngestionPipeline:
                 # Record every source claim first.
                 # Canonical state is then derived from consensus,
                 # never directly from "latest source wins".
-                self.evidence.record_observation(
+                consensus_values = (
+                    self.evidence.record_observation(
+                        conn,
+                        canonical_job_id,
+                        observation,
+                    )
+                )
+
+                self.conflicts.sync(
                     conn,
                     canonical_job_id,
-                    observation,
+                    consensus_values,
+                    seen_at,
                 )
 
                 selected_values = (
