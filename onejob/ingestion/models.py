@@ -45,3 +45,37 @@ class RawJobObservation(BaseModel):
     contact_email: Optional[str] = None
     source_payload_hash: str
     raw_payload_reference: Optional[str] = None
+
+
+class JobLifecycleState(str, Enum):
+    ACTIVE = "ACTIVE"
+    UPDATED = "UPDATED"
+    CLOSED = "CLOSED"
+    REOPENED = "REOPENED"
+    STALE = "STALE"
+
+
+class JobEventType(str, Enum):
+    JOB_DISCOVERED = "JOB_DISCOVERED"
+    JOB_SEEN = "JOB_SEEN"
+    JOB_CHANGED = "JOB_CHANGED"
+    JOB_REOPENED = "JOB_REOPENED"
+
+
+class JobVersion(BaseModel):
+    version_id: str
+    canonical_job_id: str
+    version_number: int
+    valid_from: datetime
+    valid_to: Optional[datetime] = None
+    content_hash: str
+    changed_fields: list[str] = Field(default_factory=list)
+    field_snapshot: dict[str, object] = Field(default_factory=dict)
+
+
+class JobEvent(BaseModel):
+    event_id: str
+    canonical_job_id: str
+    event_type: JobEventType
+    occurred_at: datetime
+    payload: dict[str, object] = Field(default_factory=dict)
