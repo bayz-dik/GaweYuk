@@ -67,7 +67,7 @@ from onejob.job_verification.policy import PublicationPolicy, PublicationState
 
 
 def load_security_cases():
-    path = Path("tests/security_cases/job_source_verification_cases.json")
+    path = Path("tests/security_cases_job_source/job_source_verification_cases.json")
     return json.loads(path.read_text())
 
 
