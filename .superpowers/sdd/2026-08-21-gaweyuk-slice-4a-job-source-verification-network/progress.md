@@ -44,3 +44,10 @@
 - git diff --check clean; working tree clean.
 - Deferred minors (Slice 4B+ / non-blocking): internal routers not auto-mounted in api.py pending real auth wiring; full IngestionPipeline DI constructor (source_service/entity_resolver/verification_service) deferred in favor of post-commit hook seam; registry-aware evidence authority feeds via verification service while legacy SOURCE_CONFIDENCE remains a conservative fallback for pre-registry rows.
 - Task 19: complete — head a5b92d0. Pushed feature/job-source-verification-network-4a to origin.
+
+## Pre-PR review fixes (post-push)
+- Fix 1 (ingestion wiring, head 3a3a25b): collect_one now runs post-commit _verify_after_commit → _run_trust_engine (signal extraction + shadow eval) + _verify_and_publish (ProductionVerificationStore → JobVerificationService snapshot → PublicationPolicy → transactional publication head). Provenance/appearances persisted in ingestion tx. Unregistered source -> _UnregisteredSourcePolicy (publication_evidence_allowed=False). Added reverify_and_publish + apply_authoritative_closure. Durability preserved (collector success != publication success).
+- Fix 2 (verification bridge, head 0a48722): JobVerificationService gathers optional production inputs; ProductionVerificationStore reads identity graph, corroboration (evidence families), destination, freshness, latest Trust Engine evaluation id + non-overridable hard gates. No trust duplication.
+- Fix 3 (vertical tests, head 3a295f5): test_slice4a_vertical.py A/B/C through the real pipeline; catalog fail-closed 503 tests; trust pipeline hook assertion moved to _run_trust_engine/_verify_after_commit.
+- Fix 4 (catalog, head 200a82f): PublicJob.apply_destination (safe, domain only for VERIFIED/ALLOWED_EXTERNAL); create_catalog_router(verify_ready=True) + mount_catalog_or_503 → deterministic 503 CATALOG_UNAVAILABLE, no path/stack leak.
+- Fresh full regression: 661 passed, 1 warning (pre-existing Starlette deprecation).
