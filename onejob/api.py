@@ -3,7 +3,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from onejob.service import OneJobService
+from onejob.service import (
+    CareerTwinQueryNotConfigured,
+    OneJobService,
+)
 import os
 from onejob.persistence.db import Database
 from onejob.trust_engine.explainability import TrustExplainabilityService
@@ -89,3 +92,14 @@ def job_trust(job_id: str):
         )
 
     return explanation
+
+
+@app.get("/api/career-twin")
+def career_twin():
+    try:
+        return service.career_twin_view()
+    except CareerTwinQueryNotConfigured:
+        raise HTTPException(
+            status_code=503,
+            detail="Career Twin v2 is not configured",
+        )
