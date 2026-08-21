@@ -126,3 +126,157 @@ def test_source_repository_update_state_records_event(tmp_path):
     with db.connection() as conn:
         reloaded = repo.get_by_id(conn, "src-greenhouse")
     assert reloaded.rollout_state is SourceRolloutState.OBSERVED
+
+
+# ---------------------------------------------------------------------------
+# Task 2: policy, rollout state machine, health circuit breaker
+# ---------------------------------------------------------------------------
+
+from onejob.persistence.db import Database
+
+
+def _registered_source_service(tmp_path):
+    from onejob.job_sources.service import JobSourceService
+
+    db = Database(tmp_path / "svc.db")
+    db.initialize()
+    service = JobSourceService(db)
+    source = service.register(
+        source_id="src-x",
+        source_key="x",
+        source_type=SourceType.ATS,
+        trust_tier=SourceTrustTier.TIER_1_OFFICIAL,
+        acquisition_method=AcquisitionMethod.OFFICIAL_API,
+        primary_domain="x.example",
+        country_scope=("ID",),
+        compliance_status=ComplianceStatus.ALLOWED,
+        verification_policy_version="source-policy-v1",
+        now=NOW,
+    )
+    return service, source
+
+
+def test_register_starts_in_registered_state(tmp_path):
+    service, source = _registered_source_service(tmp_path)
+    assert source.rollout_state is SourceRolloutState.REGISTERED
+
+
+def test_new_source_cannot_skip_shadow(tmp_path):
+    from onejob.job_sources.service import InvalidSourceTransition
+
+    service, source = _registered_source_service(tmp_path)
+
+    with pytest.raises(InvalidSourceTransition):
+        service.promote(
+            source_id=source.source_id,
+            expected_state=SourceRolloutState.REGISTERED,
+            target_state=SourceRolloutState.ACTIVE,
+            reason_code="manual_skip",
+            now=NOW,
+        )
+
+
+def test_promote_registered_to_shadow(tmp_path):
+    service, source = _registered_source_service(tmp_path)
+    updated = service.promote(
+        source_id=source.source_id,
+        expected_state=SourceRolloutState.REGISTERED,
+        target_state=SourceRolloutState.SHADOW,
+        reason_code="begin_shadow",
+        now=NOW,
+    )
+    assert updated.rollout_state is SourceRolloutState.SHADOW
+
+
+def test_promote_with_stale_expected_state_raises(tmp_path):
+    from onejob.job_sources.service import StaleSourceState
+
+    service, source = _registered_source_service(tmp_path)
+    service.promote(
+        source_id=source.source_id,
+        expected_state=SourceRolloutState.REGISTERED,
+        target_state=SourceRolloutState.SHADOW,
+        reason_code="begin_shadow",
+        now=NOW,
+    )
+    with pytest.raises(StaleSourceState):
+        service.promote(
+            source_id=source.source_id,
+            expected_state=SourceRolloutState.REGISTERED,
+            target_state=SourceRolloutState.OBSERVED,
+            reason_code="stale",
+            now=NOW,
+        )
+
+
+def test_policy_blocked_source_is_never_collection_eligible():
+    from onejob.job_sources.policy import SourcePolicy
+
+    blocked = _source(
+        compliance_status=ComplianceStatus.POLICY_BLOCKED,
+        rollout_state=SourceRolloutState.POLICY_BLOCKED,
+    )
+    decision = SourcePolicy().evaluate(blocked)
+    assert decision.collection_allowed is False
+    assert decision.publication_evidence_allowed is False
+
+
+def test_active_tier1_allows_publication_evidence():
+    from onejob.job_sources.policy import SourcePolicy
+
+    active = _source(rollout_state=SourceRolloutState.ACTIVE)
+    decision = SourcePolicy().evaluate(active)
+    assert decision.collection_allowed is True
+    assert decision.publication_evidence_allowed is True
+
+
+def test_tier3_shadow_may_collect_but_not_authorize_publication():
+    from onejob.job_sources.policy import SourcePolicy
+
+    tier3 = _source(
+        trust_tier=SourceTrustTier.TIER_3_DISCOVERY,
+        rollout_state=SourceRolloutState.SHADOW,
+        acquisition_method=AcquisitionMethod.PERMITTED_HTML,
+    )
+    decision = SourcePolicy().evaluate(tier3)
+    assert decision.collection_allowed is True
+    assert decision.publication_evidence_allowed is False
+
+
+def test_health_policy_violation_blocks_source():
+    from onejob.job_sources.health import (
+        SourceHealthEvaluator,
+        SourceHealthSignal,
+    )
+
+    result = SourceHealthEvaluator().evaluate(
+        SourceHealthState.HEALTHY, SourceHealthSignal.POLICY_VIOLATION
+    )
+    assert result is SourceHealthState.POLICY_BLOCKED
+
+
+def test_health_schema_mismatch_marks_schema_changed():
+    from onejob.job_sources.health import (
+        SourceHealthEvaluator,
+        SourceHealthSignal,
+    )
+
+    result = SourceHealthEvaluator().evaluate(
+        SourceHealthState.HEALTHY, SourceHealthSignal.SCHEMA_MISMATCH
+    )
+    assert result is SourceHealthState.SCHEMA_CHANGED
+
+
+def test_health_rate_limit_then_success_recovers():
+    from onejob.job_sources.health import (
+        SourceHealthEvaluator,
+        SourceHealthSignal,
+    )
+
+    evaluator = SourceHealthEvaluator()
+    limited = evaluator.evaluate(
+        SourceHealthState.HEALTHY, SourceHealthSignal.RATE_LIMIT
+    )
+    assert limited is SourceHealthState.RATE_LIMITED
+    recovered = evaluator.evaluate(limited, SourceHealthSignal.SUCCESS)
+    assert recovered is SourceHealthState.HEALTHY
