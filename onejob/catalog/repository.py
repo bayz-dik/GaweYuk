@@ -4,6 +4,7 @@ import json
 import sqlite3
 
 from onejob.catalog.models import (
+    PublicApplyDestination,
     PublicJob,
     PublicVerificationSummary,
 )
@@ -79,6 +80,43 @@ class CatalogRepository:
             ),
         )
 
+    def _apply_destination(
+        self, conn: sqlite3.Connection, canonical_job_id: str
+    ) -> PublicApplyDestination:
+        # Destination status comes from the verification snapshot that
+        # authorized the current publishable head. A safe domain is only
+        # exposed for VERIFIED/ALLOWED_EXTERNAL; raw/unverified URLs are never
+        # returned to the public.
+        row = conn.execute(
+            """
+            SELECT s.destination_status
+            FROM job_publication_heads h
+            JOIN publication_decisions d ON d.decision_id = h.decision_id
+            JOIN job_verification_snapshots s
+                ON s.verification_id = d.verification_id
+            WHERE h.canonical_job_id = ?
+            """,
+            (canonical_job_id,),
+        ).fetchone()
+        status = row[0] if row is not None else "UNKNOWN"
+
+        domain = None
+        if status in ("VERIFIED", "ALLOWED_EXTERNAL"):
+            appearance = conn.execute(
+                """
+                SELECT apply_url FROM job_source_appearances
+                WHERE canonical_job_id = ? AND apply_url IS NOT NULL
+                ORDER BY last_seen_at DESC LIMIT 1
+                """,
+                (canonical_job_id,),
+            ).fetchone()
+            if appearance is not None and appearance[0]:
+                from urllib.parse import urlsplit
+
+                domain = urlsplit(appearance[0]).hostname
+
+        return PublicApplyDestination(status=status, domain=domain)
+
     def _row_to_public_job(
         self, conn: sqlite3.Connection, row: sqlite3.Row
     ) -> PublicJob:
@@ -93,5 +131,6 @@ class CatalogRepository:
             currency=row[7],
             lifecycle=row[8],
             catalog_published_at=row[9],
+            apply_destination=self._apply_destination(conn, row[0]),
             verification_summary=self._verification_summary(conn, row[0]),
         )

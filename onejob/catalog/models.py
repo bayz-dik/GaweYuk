@@ -33,6 +33,9 @@ class PublicJob(BaseModel):
     currency: str | None = None
     lifecycle: str = "ACTIVE"
     catalog_published_at: str | None = None
+    apply_destination: PublicApplyDestination = Field(
+        default_factory=lambda: PublicApplyDestination(status="UNKNOWN")
+    )
     verification_summary: PublicVerificationSummary = Field(
         default_factory=PublicVerificationSummary
     )

@@ -71,14 +71,16 @@ if _trust_db_path:
 
 # Slice 4A public catalog. Mounted only when a database is configured. The
 # repository filters PUBLISHABLE at the SQL boundary; legacy /api/jobs is left
-# unchanged for compatibility.
+# unchanged for compatibility. If the verified catalog subsystem cannot
+# initialize, the routes fail closed with a deterministic 503 rather than
+# silently serving unverified data.
 if _trust_db_path:
-    try:
-        from onejob.catalog.api import create_catalog_router
+    from onejob.catalog.api import create_catalog_router, mount_catalog_or_503
 
-        app.include_router(create_catalog_router(Database(_trust_db_path)))
-    except Exception:
-        pass
+    mount_catalog_or_503(
+        app,
+        lambda: create_catalog_router(Database(_trust_db_path), verify_ready=True),
+    )
 class AnswerRequest(BaseModel):
     job_id: str
     question: str
