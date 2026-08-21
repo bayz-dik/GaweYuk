@@ -8,6 +8,26 @@ from pydantic import BaseModel, ConfigDict
 from onejob.career_twin.ontology import Predicate
 
 
+class BatchLifecycle(str, Enum):
+    OPEN = "OPEN"
+    PROCESSED = "PROCESSED"
+    CANCELLED = "CANCELLED"
+
+
+class SuggestionBatch(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    batch_id: str
+    twin_id: str
+    source_type: str
+    source_reference: str | None = None
+    intake_version: str
+    evidence_family_id: str
+    lifecycle: BatchLifecycle
+    created_at: datetime
+    completed_at: datetime | None = None
+
+
 class DecisionState(str, Enum):
     """User-authority axis. Whether the owner has decided the proposal."""
 
