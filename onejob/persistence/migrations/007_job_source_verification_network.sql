@@ -117,3 +117,36 @@ CREATE TABLE IF NOT EXISTS company_identity_snapshots (
     created_at TEXT NOT NULL,
     UNIQUE(company_id, input_fingerprint)
 );
+
+
+-- Task 9: immutable job verification snapshots.
+
+CREATE TABLE IF NOT EXISTS job_verification_snapshots (
+    verification_id TEXT PRIMARY KEY,
+    canonical_job_id TEXT NOT NULL,
+    canonical_version_id TEXT,
+    identity_snapshot_id TEXT,
+    trust_evaluation_id TEXT,
+    identity_state TEXT NOT NULL,
+    trust_classification TEXT NOT NULL,
+    destination_status TEXT NOT NULL,
+    freshness_state TEXT NOT NULL,
+    corroboration_json TEXT NOT NULL,
+    hard_gate_hits_json TEXT NOT NULL,
+    unknowns_json TEXT NOT NULL,
+    evaluated_at TEXT NOT NULL,
+    valid_until TEXT NOT NULL,
+    input_fingerprint TEXT NOT NULL,
+    verification_policy_version TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_job_verification_fingerprint
+ON job_verification_snapshots(canonical_job_id, input_fingerprint);
+
+CREATE TABLE IF NOT EXISTS job_verification_snapshot_evidence (
+    verification_id TEXT NOT NULL,
+    evidence_ref TEXT NOT NULL,
+    PRIMARY KEY(verification_id, evidence_ref),
+    FOREIGN KEY(verification_id)
+        REFERENCES job_verification_snapshots(verification_id)
+);
