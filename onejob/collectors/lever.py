@@ -12,6 +12,7 @@ from onejob.collectors.common import (
     stable_observation_id,
 )
 from onejob.ingestion.models import RawJobObservation, SourceType
+from onejob.job_sources.models import AcquisitionMethod
 
 
 def _from_milliseconds(value):
@@ -28,6 +29,7 @@ class LeverCollector:
     source_key = "lever"
     source_type = SourceType.ATS
     collector_version = "1"
+    acquisition_method = AcquisitionMethod.OFFICIAL_API
 
     def __init__(self, http_client):
         self.http_client = http_client
@@ -84,6 +86,7 @@ class LeverCollector:
                     collector_version=self.collector_version,
                     external_id=external_id,
                     source_url=item["hostedUrl"],
+                    apply_url=item.get("applyUrl") or item.get("hostedUrl"),
                     observed_at=datetime.now(timezone.utc),
                     updated_at=_from_milliseconds(
                         item.get("updatedAt")

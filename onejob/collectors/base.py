@@ -7,6 +7,7 @@ from typing import Protocol
 from pydantic import BaseModel, Field
 
 from onejob.ingestion.models import RawJobObservation, SourceType
+from onejob.job_sources.models import AcquisitionMethod
 
 
 class CollectorHealthStatus(str, Enum):
@@ -46,5 +47,6 @@ class Collector(Protocol):
     source_key: str
     source_type: SourceType
     collector_version: str
+    acquisition_method: AcquisitionMethod
 
     def collect(self, target: CollectionTarget) -> CollectionBatch: ...
