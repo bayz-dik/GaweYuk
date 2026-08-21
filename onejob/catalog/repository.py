@@ -83,13 +83,13 @@ class CatalogRepository:
     def _apply_destination(
         self, conn: sqlite3.Connection, canonical_job_id: str
     ) -> PublicApplyDestination:
-        # Destination status comes from the verification snapshot that
-        # authorized the current publishable head. A safe domain is only
-        # exposed for VERIFIED/ALLOWED_EXTERNAL; raw/unverified URLs are never
-        # returned to the public.
+        # Destination status AND domain both come from the verification snapshot
+        # that authorized the current publication head. Reading the domain from
+        # the latest source appearance would allow a later URL change to inherit
+        # an older VERIFIED status, so the snapshot binding is the boundary.
         row = conn.execute(
             """
-            SELECT s.destination_status
+            SELECT s.destination_status, s.destination_domain
             FROM job_publication_heads h
             JOIN publication_decisions d ON d.decision_id = h.decision_id
             JOIN job_verification_snapshots s
@@ -98,23 +98,11 @@ class CatalogRepository:
             """,
             (canonical_job_id,),
         ).fetchone()
-        status = row[0] if row is not None else "UNKNOWN"
+        if row is None:
+            return PublicApplyDestination(status="UNKNOWN")
 
-        domain = None
-        if status in ("VERIFIED", "ALLOWED_EXTERNAL"):
-            appearance = conn.execute(
-                """
-                SELECT apply_url FROM job_source_appearances
-                WHERE canonical_job_id = ? AND apply_url IS NOT NULL
-                ORDER BY last_seen_at DESC LIMIT 1
-                """,
-                (canonical_job_id,),
-            ).fetchone()
-            if appearance is not None and appearance[0]:
-                from urllib.parse import urlsplit
-
-                domain = urlsplit(appearance[0]).hostname
-
+        status = row[0]
+        domain = row[1] if status in ("VERIFIED", "ALLOWED_EXTERNAL") else None
         return PublicApplyDestination(status=status, domain=domain)
 
     def _row_to_public_job(

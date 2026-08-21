@@ -83,6 +83,12 @@ class JobVerificationService:
             corroboration = self._opt(
                 "corroboration", canonical_job_id, default=None
             )
+            destination_assessment_id = self._opt(
+                "destination_assessment_id", canonical_job_id, default=None
+            )
+            destination_domain = self._opt(
+                "destination_domain", canonical_job_id, default=None
+            )
         except Exception as exc:  # resolver/trust crash is a system failure
             raise VerificationSystemFailure(str(exc)) from exc
 
@@ -106,6 +112,7 @@ class JobVerificationService:
                 "trust_classification": trust_classification,
                 "trust_evaluation_id": trust_evaluation_id,
                 "destination_status": destination_status.value,
+                "destination_assessment_id": destination_assessment_id,
                 "freshness_state": freshness_state,
                 "hard_gate_hits": sorted(hard_gate_hits),
                 "evidence_refs": sorted(evidence_refs),
@@ -133,6 +140,8 @@ class JobVerificationService:
                 identity_state=identity_state,
                 trust_classification=trust_classification,
                 destination_status=destination_status,
+                destination_assessment_id=destination_assessment_id,
+                destination_domain=destination_domain,
                 freshness_state=freshness_state,
                 corroboration=corroboration,
                 hard_gate_hits=hard_gate_hits,

@@ -36,6 +36,8 @@ class JobVerificationSnapshot(BaseModel):
     identity_state: str
     trust_classification: str
     destination_status: ApplyDestinationStatus
+    destination_assessment_id: str | None = None
+    destination_domain: str | None = None
     freshness_state: str
     corroboration: dict[str, object] = Field(default_factory=dict)
     hard_gate_hits: tuple[str, ...] = ()

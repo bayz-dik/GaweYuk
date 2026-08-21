@@ -17,6 +17,10 @@ def _parse_dt(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
 
+def _optional_column(row: sqlite3.Row, name: str):
+    return row[name] if name in row.keys() else None
+
+
 def _row_to_snapshot(row: sqlite3.Row) -> JobVerificationSnapshot:
     return JobVerificationSnapshot(
         verification_id=row["verification_id"],
@@ -27,6 +31,8 @@ def _row_to_snapshot(row: sqlite3.Row) -> JobVerificationSnapshot:
         identity_state=row["identity_state"],
         trust_classification=row["trust_classification"],
         destination_status=ApplyDestinationStatus(row["destination_status"]),
+        destination_assessment_id=_optional_column(row, "destination_assessment_id"),
+        destination_domain=_optional_column(row, "destination_domain"),
         freshness_state=row["freshness_state"],
         corroboration=json.loads(row["corroboration_json"]),
         hard_gate_hits=tuple(json.loads(row["hard_gate_hits_json"])),
@@ -83,12 +89,13 @@ class VerificationRepository:
             INSERT INTO job_verification_snapshots (
                 verification_id, canonical_job_id, canonical_version_id,
                 identity_snapshot_id, trust_evaluation_id, identity_state,
-                trust_classification, destination_status, freshness_state,
+                trust_classification, destination_status,
+                destination_assessment_id, destination_domain, freshness_state,
                 corroboration_json, hard_gate_hits_json, unknowns_json,
                 evaluated_at, valid_until, input_fingerprint,
                 verification_policy_version
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot.verification_id,
@@ -99,6 +106,8 @@ class VerificationRepository:
                 snapshot.identity_state,
                 snapshot.trust_classification,
                 snapshot.destination_status.value,
+                snapshot.destination_assessment_id,
+                snapshot.destination_domain,
                 snapshot.freshness_state,
                 json.dumps(snapshot.corroboration, sort_keys=True),
                 json.dumps(list(snapshot.hard_gate_hits)),
@@ -201,3 +210,50 @@ class _PublicationMixin:
 
 for _name in ("append_publication_decision", "get_publication_head"):
     setattr(VerificationRepository, _name, getattr(_PublicationMixin, _name))
+
+
+class _DestinationAssessmentMixin:
+    def append_destination_assessment(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        assessment_id: str,
+        canonical_job_id: str,
+        assessment,
+        assessed_at: datetime,
+    ) -> None:
+        """Persist an immutable apply-destination assessment.
+
+        The verification snapshot references this row, so the catalog can expose
+        exactly the destination that was verified for the current publication
+        head even if a later source appearance reports a different URL.
+        """
+        conn.execute(
+            """
+            INSERT INTO apply_destination_assessments (
+                assessment_id, canonical_job_id, original_apply_url,
+                resolved_apply_url, resolved_domain,
+                redirect_chain_fingerprint, destination_status,
+                reason_codes_json, assessed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                assessment_id,
+                canonical_job_id,
+                assessment.original_apply_url,
+                assessment.resolved_apply_url,
+                assessment.resolved_domain,
+                assessment.redirect_chain_fingerprint,
+                assessment.destination_status.value,
+                json.dumps(list(assessment.reason_codes)),
+                _dt(assessed_at),
+            ),
+        )
+
+
+setattr(
+    VerificationRepository,
+    "append_destination_assessment",
+    _DestinationAssessmentMixin.append_destination_assessment,
+)

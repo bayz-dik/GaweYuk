@@ -5,10 +5,8 @@ from datetime import datetime
 
 from onejob.company_identity.repository import CompanyIdentityRepository
 from onejob.company_identity.resolver import CompanyIdentityResolver
-from onejob.ingestion.identity import company_id_for
 from onejob.job_verification.freshness import FreshnessState, assess_freshness
 from onejob.job_verification.models import ApplyDestinationStatus
-from onejob.trust_engine.models import RecruitmentStage
 from onejob.trust_engine.repository import TrustRepository
 
 
@@ -27,6 +25,7 @@ class ProductionVerificationStore:
         db,
         *,
         destination_status_by_job: dict[str, ApplyDestinationStatus] | None = None,
+        destination_assessments: dict[str, tuple] | None = None,
         closed_jobs: set[str] | None = None,
         now: datetime | None = None,
     ):
@@ -35,6 +34,9 @@ class ProductionVerificationStore:
         self.identity_resolver = CompanyIdentityResolver()
         self.trust_repo = TrustRepository()
         self._destination = destination_status_by_job or {}
+        # (status, assessment_id, resolved_domain) per canonical job, produced by
+        # the real DestinationVerifier and bound into the verification snapshot.
+        self._destination_assessments = destination_assessments or {}
         self._closed = closed_jobs or set()
         self._now = now
 
@@ -87,6 +89,24 @@ class ProductionVerificationStore:
         return self._destination.get(
             canonical_job_id, ApplyDestinationStatus.UNKNOWN
         )
+
+    def destination_assessment_id(self, canonical_job_id: str) -> str | None:
+        entry = self._destination_assessments.get(canonical_job_id)
+        return entry[1] if entry else None
+
+    def destination_domain(self, canonical_job_id: str) -> str | None:
+        entry = self._destination_assessments.get(canonical_job_id)
+        if not entry:
+            return None
+        status, _assessment_id, domain = entry
+        # A domain is only carried forward for destinations that actually passed
+        # verification; unsafe/unknown destinations expose no domain.
+        if status in (
+            ApplyDestinationStatus.VERIFIED,
+            ApplyDestinationStatus.ALLOWED_EXTERNAL,
+        ):
+            return domain
+        return None
 
     def evidence_refs(self, canonical_job_id: str) -> tuple[str, ...]:
         with self.db.connection() as conn:

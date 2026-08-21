@@ -231,3 +231,30 @@ CREATE TABLE IF NOT EXISTS reverification_work (
 
 CREATE INDEX IF NOT EXISTS idx_reverification_due
 ON reverification_work(status, due_at);
+
+
+-- Pre-PR fix: immutable apply-destination assessments bound to a verification
+-- snapshot. The public catalog reads the destination that was actually verified
+-- for the current publication head, so a later appearance URL change cannot
+-- inherit an older VERIFIED status.
+
+CREATE TABLE IF NOT EXISTS apply_destination_assessments (
+    assessment_id TEXT PRIMARY KEY,
+    canonical_job_id TEXT NOT NULL,
+    original_apply_url TEXT,
+    resolved_apply_url TEXT,
+    resolved_domain TEXT,
+    redirect_chain_fingerprint TEXT,
+    destination_status TEXT NOT NULL,
+    reason_codes_json TEXT NOT NULL,
+    assessed_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_apply_destination_job
+ON apply_destination_assessments(canonical_job_id, assessed_at DESC);
+
+ALTER TABLE job_verification_snapshots
+ADD COLUMN destination_assessment_id TEXT;
+
+ALTER TABLE job_verification_snapshots
+ADD COLUMN destination_domain TEXT;
