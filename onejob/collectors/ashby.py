@@ -12,6 +12,7 @@ from onejob.collectors.common import (
     stable_observation_id,
 )
 from onejob.ingestion.models import RawJobObservation, SourceType
+from onejob.job_sources.models import AcquisitionMethod
 
 
 def _parse_datetime(value: str | None):
@@ -27,6 +28,7 @@ class AshbyCollector:
     source_key = "ashby"
     source_type = SourceType.ATS
     collector_version = "1"
+    acquisition_method = AcquisitionMethod.OFFICIAL_API
 
     def __init__(self, http_client):
         self.http_client = http_client
@@ -80,6 +82,7 @@ class AshbyCollector:
                     collector_version=self.collector_version,
                     external_id=external_id,
                     source_url=item["jobUrl"],
+                    apply_url=item.get("applyUrl") or item.get("jobUrl"),
                     observed_at=datetime.now(timezone.utc),
                     published_at=_parse_datetime(
                         item.get("publishedAt")

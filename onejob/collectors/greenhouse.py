@@ -13,6 +13,7 @@ from onejob.collectors.common import (
     stable_observation_id,
 )
 from onejob.ingestion.models import RawJobObservation, SourceType
+from onejob.job_sources.models import AcquisitionMethod
 
 
 class _TextExtractor(HTMLParser):
@@ -51,6 +52,7 @@ class GreenhouseCollector:
     source_key = "greenhouse"
     source_type = SourceType.ATS
     collector_version = "1"
+    acquisition_method = AcquisitionMethod.OFFICIAL_API
 
     def __init__(self, http_client):
         self.http_client = http_client
@@ -104,6 +106,7 @@ class GreenhouseCollector:
                     collector_version=self.collector_version,
                     external_id=external_id,
                     source_url=item["absolute_url"],
+                    apply_url=item.get("absolute_url"),
                     observed_at=datetime.now(timezone.utc),
                     updated_at=_parse_datetime(
                         item.get("updated_at")

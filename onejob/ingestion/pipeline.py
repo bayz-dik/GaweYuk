@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from onejob.ingestion.evidence_store import (
     EvidenceConsensusStore,
@@ -15,6 +17,15 @@ from onejob.ingestion.identity import (
     company_id_for,
     job_identity_key,
 )
+from onejob.ingestion.entity_resolution import (
+    JobEntityResolver,
+    JobIdentityCandidate,
+    JobIdentityDisposition,
+)
+from onejob.ingestion.provenance import (
+    AppearanceRepository,
+    derive_evidence_family_id,
+)
 from onejob.ingestion.lifecycle import (
     diff_material_fields,
     material_snapshot,
@@ -22,7 +33,28 @@ from onejob.ingestion.lifecycle import (
 from onejob.persistence.repositories import (
     ObservationRepository,
 )
+from onejob.job_sources.policy import SourcePolicy
+from onejob.job_sources.repository import SourceRepository
+from onejob.job_verification.policy import (
+    PublicationPolicy,
+    PublicationState,
+)
+from onejob.job_verification.models import (
+    ApplyDestinationAssessment,
+    ApplyDestinationStatus,
+)
+from onejob.job_verification.production_store import (
+    ProductionVerificationStore,
+)
+from onejob.job_verification.repository import VerificationRepository
+from onejob.job_verification.service import (
+    JobVerificationService,
+    VerificationSystemFailure,
+)
+from onejob.trust_engine.models import RecruitmentStage
+from onejob.trust_engine.repository import TrustRepository
 from onejob.trust_engine.service import TrustEngineService
+from onejob.trust_engine.signals import extract_deterministic_signals
 
 
 def _normalize(value: str) -> str:
@@ -49,15 +81,54 @@ class IngestionResult:
     canonical_job_ids: list[str] = field(
         default_factory=list
     )
+    # Observations whose canonical identity was AMBIGUOUS. They are preserved
+    # with provenance and routed to review instead of being merged.
+    ambiguous_observation_ids: list[str] = field(default_factory=list)
+
+
+class _UnregisteredSourcePolicy:
+    """Policy for observations from a source not in the registry.
+
+    An unknown/unregistered source may have its evidence stored but can never
+    contribute publication authority, so publication stays closed.
+    """
+
+    publication_evidence_allowed = False
+    collection_allowed = True
+    reason_codes = ("SOURCE_NOT_REGISTERED",)
 
 
 class IngestionPipeline:
-    def __init__(self, db):
+    def __init__(
+        self,
+        db,
+        *,
+        destination_status_by_job=None,
+        destination_verifier=None,
+        destination_fetcher=None,
+        recruitment_stage: RecruitmentStage = RecruitmentStage.APPLICATION,
+    ):
         self.db = db
         self.observations = ObservationRepository()
         self.evidence = EvidenceConsensusStore()
         self.conflicts = ConflictExplainabilityStore()
         self.trust = TrustEngineService(db)
+        # Slice 4A verification network collaborators. Adapters observe;
+        # this orchestrator preserves, canonicalizes, verifies, and publishes.
+        self.sources = SourceRepository()
+        self.source_policy = SourcePolicy()
+        self.appearances = AppearanceRepository()
+        self.entity_resolver = JobEntityResolver()
+        self.trust_repo = TrustRepository()
+        self.verification_repo = VerificationRepository()
+        self.publication_policy = PublicationPolicy()
+        # Destination verification is injected so tests never touch the network.
+        # Without a verifier the boundary fails closed to UNKNOWN; a non-empty
+        # URL is never treated as verified.
+        self.destination_verifier = destination_verifier
+        self.destination_fetcher = destination_fetcher
+        self._destination_status_by_job = destination_status_by_job or {}
+        self._recruitment_stage = recruitment_stage
 
     @staticmethod
     def _resolved_data(
@@ -215,9 +286,142 @@ class IngestionPipeline:
             ),
         )
 
+    def _resolve_identity(
+        self,
+        conn,
+        *,
+        observation,
+        company_id: str,
+        provisional_job_id: str,
+    ):
+        """Run the tri-state resolver against existing candidates.
+
+        An authoritative source + external requisition id is a strong key. When
+        several same-company candidates are plausible the resolver returns
+        AMBIGUOUS and the caller must not merge.
+        """
+        # An exact provisional-key hit is the same requisition family.
+        rows = conn.execute(
+            """
+            SELECT cj.canonical_job_id, cj.company_id, cj.title, cj.location,
+                   cj.description, cj.employment_type
+            FROM canonical_jobs cj
+            WHERE cj.company_id = ?
+            """,
+            (company_id,),
+        ).fetchall()
+
+        authoritative_ids = {
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT canonical_job_id FROM job_source_appearances
+                WHERE external_id = ?
+                """,
+                (observation.external_id,),
+            ).fetchall()
+        }
+
+        existing_candidates = tuple(
+            JobIdentityCandidate(
+                canonical_job_id=row[0],
+                company_id=row[1],
+                source_id=observation.source_key,
+                external_id=observation.external_id,
+                authoritative_external_id=row[0] in authoritative_ids,
+                title=row[2],
+                location=row[3],
+                description=row[4] or "",
+                employment_type=row[5],
+            )
+            for row in rows
+        )
+
+        incoming = JobIdentityCandidate(
+            canonical_job_id=None,
+            company_id=company_id,
+            source_id=observation.source_key,
+            external_id=observation.external_id,
+            authoritative_external_id=True,
+            title=observation.title,
+            location=observation.location_text,
+            description=observation.description,
+            employment_type=observation.employment_type,
+        )
+
+        return self.entity_resolver.resolve(
+            incoming=incoming, existing=existing_candidates
+        )
+
+    def _hold_ambiguous_observation(
+        self,
+        conn,
+        *,
+        observation,
+        company_id: str,
+        reason_codes,
+    ) -> None:
+        """Preserve an ambiguous observation without merging it.
+
+        Raw observation + provenance stay durable and a possible-duplicate
+        review case is opened so a human can resolve the identity.
+        """
+        registered_source = self.sources.get_by_key(conn, observation.source_key)
+        source_id = (
+            registered_source.source_id
+            if registered_source is not None
+            else observation.source_key
+        )
+        evidence_family_id = derive_evidence_family_id(
+            source_id=source_id,
+            external_id=observation.external_id,
+            upstream_family_hint=observation.upstream_family_hint,
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO observation_provenance (
+                observation_id, source_id, evidence_family_id, apply_url,
+                recorded_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                observation.observation_id,
+                source_id,
+                evidence_family_id,
+                observation.apply_url,
+                observation.observed_at.isoformat(),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO verification_cases (
+                case_id, canonical_job_id, verification_id, reason_codes_json,
+                priority, state, opened_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"case-ambiguous-{observation.observation_id}",
+                f"unresolved:{observation.observation_id}",
+                f"unresolved:{observation.observation_id}",
+                _json(
+                    ["AMBIGUOUS_JOB_IDENTITY", *list(reason_codes)]
+                ),
+                "LOW",
+                "OPEN",
+                observation.observed_at.isoformat(),
+            ),
+        )
+
     def collect_one(self, collector, target) -> IngestionResult:
         batch = collector.collect(target)
         result = IngestionResult()
+        # Capture apply-destination + risk text per canonical job for the
+        # post-commit verification pass. Adapters observe only; trust/publication
+        # authority is applied strictly after ingestion commits.
+        job_apply_url: dict[str, str | None] = {}
+        job_risk_text: dict[str, str] = {}
 
         with self.db.transaction() as conn:
             for observation in batch.observations:
@@ -256,10 +460,38 @@ class IngestionPipeline:
                     ),
                 )
 
-                canonical_job_id = job_identity_key(
+                # Tri-state canonical identity. The legacy key is only a
+                # provisional/compatibility candidate; the resolver decides
+                # SAME / DISTINCT / AMBIGUOUS and AMBIGUOUS never merges.
+                provisional_job_id = job_identity_key(
                     company_id,
                     normalized_title,
                     normalized_location,
+                )
+                decision = self._resolve_identity(
+                    conn,
+                    observation=observation,
+                    company_id=company_id,
+                    provisional_job_id=provisional_job_id,
+                )
+
+                if decision.disposition is JobIdentityDisposition.AMBIGUOUS:
+                    self._hold_ambiguous_observation(
+                        conn,
+                        observation=observation,
+                        company_id=company_id,
+                        reason_codes=decision.reason_codes,
+                    )
+                    result.ambiguous_observation_ids.append(
+                        observation.observation_id
+                    )
+                    continue
+
+                canonical_job_id = (
+                    decision.canonical_job_id
+                    if decision.disposition is JobIdentityDisposition.SAME
+                    and decision.canonical_job_id
+                    else provisional_job_id
                 )
 
                 existing = conn.execute(
@@ -458,6 +690,53 @@ class IngestionPipeline:
                     ),
                 )
 
+                # Provenance + source appearance so mirrors share one upstream
+                # evidence family and repeated sightings advance last_seen
+                # without rewriting raw observations.
+                registered_source = self.sources.get_by_key(
+                    conn, observation.source_key
+                )
+                source_id = (
+                    registered_source.source_id
+                    if registered_source is not None
+                    else observation.source_key
+                )
+                evidence_family_id = derive_evidence_family_id(
+                    source_id=source_id,
+                    external_id=observation.external_id,
+                    # A syndicated mirror declares its upstream origin family so
+                    # corroboration counts the shared origin once, no matter how
+                    # many source appearances repeat it.
+                    upstream_family_hint=observation.upstream_family_hint,
+                )
+                self.appearances.upsert_seen(
+                    conn,
+                    canonical_job_id=canonical_job_id,
+                    source_id=source_id,
+                    external_id=observation.external_id,
+                    source_url=observation.source_url,
+                    apply_url=observation.apply_url,
+                    evidence_family_id=evidence_family_id,
+                    observation_id=observation.observation_id,
+                    seen_at=observation.observed_at,
+                )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO observation_provenance (
+                        observation_id, source_id, evidence_family_id,
+                        apply_url, recorded_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        observation.observation_id,
+                        source_id,
+                        evidence_family_id,
+                        observation.apply_url,
+                        seen_at,
+                    ),
+                )
+
                 if (
                     canonical_job_id
                     not in result.canonical_job_ids
@@ -465,6 +744,8 @@ class IngestionPipeline:
                     result.canonical_job_ids.append(
                         canonical_job_id
                     )
+                job_apply_url[canonical_job_id] = observation.apply_url
+                job_risk_text[canonical_job_id] = observation.description
 
             changed_count = max(
                 0,
@@ -478,6 +759,9 @@ class IngestionPipeline:
                 batch.collector_version,
                 batch.started_at.isoformat(),
                 batch.finished_at.isoformat(),
+                # Observation ids keep runs distinct when a fixture collector
+                # reports identical start/finish timestamps.
+                *sorted(o.observation_id for o in batch.observations),
             )
 
             conn.execute(
@@ -524,14 +808,284 @@ class IngestionPipeline:
             )
 
 
-        # Trust Engine runs after the ingestion
-        # transaction has committed. Shadow Mode
-        # must never roll back successful ingestion.
-        self.trust.shadow_evaluate_after_ingestion(
-            result.canonical_job_ids
+        # Downstream verification runs strictly after ingestion has committed
+        # so a failure cannot roll back durable raw evidence. collector success
+        # is not publication success.
+        self._verify_after_commit(
+            result.canonical_job_ids,
+            apply_url_by_job=job_apply_url,
+            risk_text_by_job=job_risk_text,
         )
 
         return result
+
+    def _verify_after_commit(
+        self,
+        canonical_job_ids,
+        *,
+        apply_url_by_job=None,
+        risk_text_by_job=None,
+    ) -> None:
+        apply_url_by_job = apply_url_by_job or {}
+        risk_text_by_job = risk_text_by_job or {}
+
+        # 1. Extract deterministic risk signals and run the existing Trust
+        #    Engine (the single trust authority) after commit.
+        self._run_trust_engine(canonical_job_ids, risk_text_by_job)
+
+        # 2. Assemble immutable verification snapshots and apply publication
+        #    policy, updating the publication head. A system failure fails
+        #    closed for publication but never rolls back committed evidence.
+        self._verify_and_publish(canonical_job_ids, apply_url_by_job)
+
+    def _run_trust_engine(self, canonical_job_ids, risk_text_by_job) -> None:
+        now = datetime.now(timezone.utc)
+        for canonical_job_id in canonical_job_ids:
+            text = risk_text_by_job.get(canonical_job_id)
+            if text:
+                signals = extract_deterministic_signals(
+                    canonical_job_id=canonical_job_id,
+                    text=text,
+                    stage=self._recruitment_stage,
+                    evidence_ref=f"observation:{canonical_job_id}",
+                    observed_at=now,
+                )
+                if signals:
+                    with self.db.transaction() as conn:
+                        self.trust_repo.ensure_schema(conn)
+                        for signal in signals:
+                            self.trust_repo.upsert_signal(conn, signal)
+        self.trust.shadow_evaluate_after_ingestion(
+            canonical_job_ids,
+            stage=self._recruitment_stage,
+            now=now,
+        )
+
+    def _verify_and_publish(self, canonical_job_ids, apply_url_by_job) -> None:
+        now = datetime.now(timezone.utc)
+        assessments = self._assess_destinations(apply_url_by_job, now=now)
+        destination_status = dict(self._destination_status_by_job)
+        destination_status.update(
+            {job_id: item[0] for job_id, item in assessments.items()}
+        )
+        store = ProductionVerificationStore(
+            self.db,
+            destination_status_by_job=destination_status,
+            destination_assessments=assessments,
+            now=now,
+        )
+        verification = JobVerificationService(self.db, store=store, now_default=now)
+
+        for canonical_job_id in canonical_job_ids:
+            self._publish_one(verification, canonical_job_id, now)
+
+    def _publish_one(self, verification, canonical_job_id, now) -> None:
+        snapshot = verification.evaluate(canonical_job_id, now=now)
+        source_policy = self._source_policy_for(canonical_job_id)
+        draft = self.publication_policy.evaluate(
+            snapshot, source_policy=source_policy
+        )
+        with self.db.transaction() as conn:
+            self.verification_repo.append_publication_decision(
+                conn,
+                decision_id=f"dec-{uuid4().hex}",
+                canonical_job_id=canonical_job_id,
+                verification_id=snapshot.verification_id,
+                state=draft.state,
+                reason_codes=draft.reason_codes,
+                decided_at=now,
+            )
+
+    def reverify_and_publish(
+        self, canonical_job_id: str, *, now, destination_status=None
+    ) -> None:
+        """Re-run verification + publication for a single job after inputs change.
+
+        Reads the current persisted Trust Engine decision and other assessments,
+        materializes a fresh snapshot, and appends a new publication decision.
+        A PUBLISHABLE head is only produced when verification is actually
+        publication-eligible.
+        """
+        destinations = dict(self._destination_status_by_job)
+        if destination_status:
+            destinations.update(destination_status)
+
+        apply_url = self._latest_apply_url(canonical_job_id)
+        assessments = self._assess_destinations(
+            {canonical_job_id: apply_url}, now=now
+        )
+        if canonical_job_id not in destinations and assessments:
+            destinations[canonical_job_id] = assessments[canonical_job_id][0]
+
+        store = ProductionVerificationStore(
+            self.db,
+            destination_status_by_job=destinations,
+            destination_assessments=assessments,
+            now=now,
+        )
+        verification = JobVerificationService(self.db, store=store, now_default=now)
+        self._publish_one(verification, canonical_job_id, now)
+
+    def _latest_apply_url(self, canonical_job_id: str) -> str | None:
+        with self.db.connection() as conn:
+            row = conn.execute(
+                "SELECT apply_url FROM job_source_appearances "
+                "WHERE canonical_job_id = ? AND apply_url IS NOT NULL "
+                "ORDER BY last_seen_at DESC LIMIT 1",
+                (canonical_job_id,),
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def _assess_destinations(self, apply_url_by_job, *, now):
+        """Verify apply destinations through the injected DestinationVerifier.
+
+        A non-empty URL is never treated as verified. Without an injected
+        verifier the boundary fails closed to UNKNOWN. Each assessment is
+        persisted immutably and bound to the verification snapshot so the
+        catalog can only expose the destination that was actually verified.
+        """
+        assessments: dict[str, tuple] = {}
+
+        for canonical_job_id, apply_url in apply_url_by_job.items():
+            if canonical_job_id in self._destination_status_by_job:
+                continue
+
+            if apply_url is None:
+                assessment = ApplyDestinationAssessment(
+                    original_apply_url=None,
+                    resolved_apply_url=None,
+                    resolved_domain=None,
+                    redirect_chain_fingerprint=None,
+                    destination_status=ApplyDestinationStatus.UNKNOWN,
+                    reason_codes=("NO_APPLY_URL",),
+                )
+            elif self.destination_verifier is None:
+                # Fail closed: an unassessed URL stays UNKNOWN.
+                assessment = ApplyDestinationAssessment(
+                    original_apply_url=apply_url,
+                    resolved_apply_url=None,
+                    resolved_domain=None,
+                    redirect_chain_fingerprint=None,
+                    destination_status=ApplyDestinationStatus.UNKNOWN,
+                    reason_codes=("DESTINATION_NOT_ASSESSED",),
+                )
+            else:
+                allowed_domains = self._allowed_domains_for(canonical_job_id)
+                fetcher = self.destination_fetcher or (lambda url: [url])
+                try:
+                    assessment = self.destination_verifier.verify(
+                        apply_url,
+                        allowed_domains=allowed_domains,
+                        fetcher=fetcher,
+                    )
+                except Exception:
+                    # Verifier failure is a system failure, not verification.
+                    assessment = ApplyDestinationAssessment(
+                        original_apply_url=apply_url,
+                        resolved_apply_url=None,
+                        resolved_domain=None,
+                        redirect_chain_fingerprint=None,
+                        destination_status=ApplyDestinationStatus.UNKNOWN,
+                        reason_codes=("DESTINATION_VERIFIER_FAILED",),
+                    )
+
+            assessment_id = f"dest-{uuid4().hex}"
+            with self.db.transaction() as conn:
+                self.verification_repo.append_destination_assessment(
+                    conn,
+                    assessment_id=assessment_id,
+                    canonical_job_id=canonical_job_id,
+                    assessment=assessment,
+                    assessed_at=now,
+                )
+            assessments[canonical_job_id] = (
+                assessment.destination_status,
+                assessment_id,
+                assessment.resolved_domain,
+            )
+
+        return assessments
+
+    def _allowed_domains_for(self, canonical_job_id: str) -> tuple[str, ...]:
+        # Only registry-declared source domains and verified company career/ATS
+        # domains may yield VERIFIED. Everything else is at most external.
+        domains: list[str] = []
+        with self.db.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT js.primary_domain
+                FROM job_source_appearances a
+                JOIN job_sources js ON js.source_id = a.source_id
+                WHERE a.canonical_job_id = ? AND js.primary_domain IS NOT NULL
+                """,
+                (canonical_job_id,),
+            ).fetchall()
+            domains.extend(row[0] for row in rows)
+
+            identity_rows = conn.execute(
+                """
+                SELECT n.value
+                FROM canonical_jobs cj
+                JOIN company_identity_relationships r
+                    ON r.company_id = cj.company_id
+                JOIN company_identity_nodes n ON n.node_id = r.node_id
+                WHERE cj.canonical_job_id = ?
+                  AND r.status = 'VERIFIED'
+                  AND n.node_type IN ('CAREER_DOMAIN', 'DOMAIN')
+                """,
+                (canonical_job_id,),
+            ).fetchall()
+            domains.extend(row[0] for row in identity_rows)
+
+        return tuple(sorted({d for d in domains if d}))
+
+    def _source_policy_for(self, canonical_job_id: str):
+        with self.db.connection() as conn:
+            row = conn.execute(
+                "SELECT source_id FROM job_source_appearances "
+                "WHERE canonical_job_id = ? ORDER BY first_seen_at LIMIT 1",
+                (canonical_job_id,),
+            ).fetchone()
+            source = (
+                self.sources.get_by_id(conn, row[0]) if row is not None else None
+            )
+        if source is None:
+            return _UnregisteredSourcePolicy()
+        return self.source_policy.evaluate(source)
+
+    def apply_authoritative_closure(self, canonical_job_id: str, *, now) -> None:
+        """Authoritative closure -> CLOSED lifecycle + WITHDRAWN publication.
+
+        Reverification confirmed the requisition is closed. History and
+        evidence are preserved; only the active catalog visibility is removed.
+        """
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE canonical_jobs SET lifecycle_state = 'CLOSED', "
+                "last_seen_at = ? WHERE canonical_job_id = ?",
+                (now.isoformat(), canonical_job_id),
+            )
+        store = ProductionVerificationStore(
+            self.db,
+            destination_status_by_job=dict(self._destination_status_by_job),
+            closed_jobs={canonical_job_id},
+            now=now,
+        )
+        verification = JobVerificationService(self.db, store=store, now_default=now)
+        snapshot = verification.evaluate(canonical_job_id, now=now)
+        draft = self.publication_policy.evaluate(
+            snapshot, source_policy=self._source_policy_for(canonical_job_id)
+        )
+        with self.db.transaction() as conn:
+            self.verification_repo.append_publication_decision(
+                conn,
+                decision_id=f"dec-{uuid4().hex}",
+                canonical_job_id=canonical_job_id,
+                verification_id=snapshot.verification_id,
+                state=draft.state,
+                reason_codes=draft.reason_codes,
+                decided_at=now,
+            )
 
     def collect_many(self, collection_jobs):
         results = []
