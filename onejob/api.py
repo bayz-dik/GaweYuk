@@ -69,6 +69,17 @@ if _trust_db_path:
         # Contextual API is optional; never break the base app if unavailable.
         pass
 
+# Slice 4A public catalog. Mounted only when a database is configured. The
+# repository filters PUBLISHABLE at the SQL boundary; legacy /api/jobs is left
+# unchanged for compatibility.
+if _trust_db_path:
+    try:
+        from onejob.catalog.api import create_catalog_router
+
+        app.include_router(create_catalog_router(Database(_trust_db_path)))
+    except Exception:
+        pass
+
 class AnswerRequest(BaseModel):
     job_id: str
     question: str
