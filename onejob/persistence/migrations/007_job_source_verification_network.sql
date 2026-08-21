@@ -32,3 +32,51 @@ CREATE TABLE IF NOT EXISTS job_source_state_events (
 
 CREATE INDEX IF NOT EXISTS idx_job_source_state_events_source
 ON job_source_state_events(source_id, occurred_at);
+
+
+-- Task 4: evidence families and source appearances.
+
+CREATE TABLE IF NOT EXISTS evidence_families (
+    evidence_family_id TEXT PRIMARY KEY,
+    origin_source_id TEXT,
+    origin_external_id TEXT,
+    lineage_kind TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS job_source_appearances (
+    appearance_id TEXT PRIMARY KEY,
+    canonical_job_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    apply_url TEXT,
+    evidence_family_id TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    latest_observation_id TEXT NOT NULL,
+    appearance_state TEXT NOT NULL,
+    UNIQUE(source_id, external_id),
+    FOREIGN KEY(canonical_job_id) REFERENCES canonical_jobs(canonical_job_id),
+    FOREIGN KEY(latest_observation_id)
+        REFERENCES raw_job_observations(observation_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_source_appearances_job
+ON job_source_appearances(canonical_job_id);
+
+CREATE INDEX IF NOT EXISTS idx_job_source_appearances_family
+ON job_source_appearances(evidence_family_id);
+
+-- Normalized provenance for a raw observation: which registered source and
+-- evidence family produced it, plus captured apply URL. Kept separate from
+-- raw_job_observations so the Slice 1 raw table stays additive-compatible.
+CREATE TABLE IF NOT EXISTS observation_provenance (
+    observation_id TEXT PRIMARY KEY,
+    source_id TEXT,
+    evidence_family_id TEXT NOT NULL,
+    apply_url TEXT,
+    recorded_at TEXT NOT NULL,
+    FOREIGN KEY(observation_id)
+        REFERENCES raw_job_observations(observation_id)
+);

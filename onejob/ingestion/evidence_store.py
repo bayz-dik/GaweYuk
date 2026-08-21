@@ -82,11 +82,25 @@ class EvidenceConsensusStore:
         conn: sqlite3.Connection,
         canonical_job_id: str,
         observation: RawJobObservation,
+        *,
+        evidence_family_id: str | None = None,
+        source_confidence: float | None = None,
     ) -> dict[str, ConsensusValue]:
         results: dict[str, ConsensusValue] = {}
 
-        family_id = _family_id(observation)
-        confidence = _source_confidence(observation)
+        # Evidence-family lineage is explicit when the caller resolved a
+        # registered source; the legacy source_key:external_id derivation is a
+        # compatibility fallback only for pre-registry callers.
+        family_id = (
+            evidence_family_id
+            if evidence_family_id is not None
+            else _family_id(observation)
+        )
+        confidence = (
+            source_confidence
+            if source_confidence is not None
+            else _source_confidence(observation)
+        )
 
         for field_name in MATERIAL_FIELDS:
             value = getattr(
