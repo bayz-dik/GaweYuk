@@ -36,3 +36,11 @@
 - Task 17: complete — head a287e5d. Failure matrix: UNKNOWN identity is domain result vs resolver crash -> VerificationSystemFailure; failed 2nd publication decision preserves old head; source registration DB error leaves no partial row. RED → GREEN 6 passed; failure/ingestion/trust/publication regression 137 passed.
 - Task 18: complete — head 7e0dfb5. E2E acceptance: authoritative publish reaches catalog with independent_evidence_family_count=1; official closure -> WITHDRAWN, catalog 404, history preserved (2 decisions/snapshots); scam/impersonation ABSOLUTE_BLOCK+hard gate -> REJECTED, never in catalog, raw evidence preserved; mirror lineage 3 appearances=1 family; ambiguous duplicate no merge; legacy /api/jobs still 200. RED 1 fail (FK node) → GREEN 11 passed.
 - Task 19: in progress — Anti-Slop code audit (no TODO/TBD/FIXME in Slice 4A modules; comments explain security/policy/why-not-independent invariants), architecture invariant search clean (collectors/trust import no catalog/publication; catalog SQL filters PUBLISHABLE). Targeted Slice 4A suite 145 passed. Fresh full regression: 656 passed, 1 warning (pre-existing Starlette deprecation).
+
+## Final whole-branch review
+- Architecture invariants verified by search: collectors + trust_engine import no catalog/publication; catalog repo filters PUBLISHABLE in SQL; job_verification/company_identity/job_sources import no catalog (no reverse dependency); publication decision + head move in one transaction; no bare except swallowing verification->legacy in pipeline/catalog.
+- No TODO/TBD/FIXME placeholders in Slice 4A modules.
+- Fresh full regression: 656 passed, 1 warning (pre-existing Starlette/TestClient deprecation).
+- git diff --check clean; working tree clean.
+- Deferred minors (Slice 4B+ / non-blocking): internal routers not auto-mounted in api.py pending real auth wiring; full IngestionPipeline DI constructor (source_service/entity_resolver/verification_service) deferred in favor of post-commit hook seam; registry-aware evidence authority feeds via verification service while legacy SOURCE_CONFIDENCE remains a conservative fallback for pre-registry rows.
+- Task 19: complete — head a5b92d0. Pushed feature/job-source-verification-network-4a to origin.
