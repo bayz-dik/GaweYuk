@@ -213,3 +213,21 @@ CREATE TABLE IF NOT EXISTS verification_review_idempotency (
     resolution_id TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+
+-- Task 12: persistent reverification work queue.
+
+CREATE TABLE IF NOT EXISTS reverification_work (
+    work_id TEXT PRIMARY KEY,
+    canonical_job_id TEXT NOT NULL,
+    due_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error_class TEXT,
+    claimed_at TEXT,
+    completed_at TEXT,
+    UNIQUE(canonical_job_id, due_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reverification_due
+ON reverification_work(status, due_at);
