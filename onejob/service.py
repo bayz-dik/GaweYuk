@@ -7,9 +7,19 @@ from onejob.normalization import normalize_job
 from onejob.repository import DemoRepository
 from onejob.trust import assess_trust
 
+
+class CareerTwinQueryNotConfigured(RuntimeError):
+    pass
+
 class OneJobService:
-    def __init__(self, repo: DemoRepository):
+    def __init__(
+        self,
+        repo: DemoRepository,
+        *,
+        career_twin_query=None,
+    ):
         self.repo = repo
+        self.career_twin_query = career_twin_query
         self.profile = repo.load_profile()
         self.jobs = deduplicate_jobs([normalize_job(raw) for raw in repo.load_jobs()])
 
@@ -63,3 +73,44 @@ class OneJobService:
 
     def profile_view(self) -> dict:
         return self.profile.model_dump()
+
+    def career_twin_view(self) -> dict:
+        if self.career_twin_query is None:
+            raise CareerTwinQueryNotConfigured(
+                "Career Twin v2 query is not configured"
+            )
+
+        raw = self.career_twin_query.safe_view()
+
+        safe_claim_fields = (
+            "claim_id",
+            "entity_id",
+            "predicate",
+            "approval_state",
+            "lifecycle_state",
+            "provenance_trust_tier",
+            "claim_confidence",
+        )
+
+        claims = [
+            {
+                key: claim[key]
+                for key in safe_claim_fields
+                if key in claim
+            }
+            for claim in raw.get("claims", [])
+        ]
+
+        # Explicit top-level allowlist as another
+        # privacy boundary. Unknown fields are dropped.
+        return {
+            "twin_id": raw.get("twin_id"),
+            "projection_version": raw.get(
+                "projection_version"
+            ),
+            "input_fingerprint": raw.get(
+                "input_fingerprint"
+            ),
+            "entities": raw.get("entities", {}),
+            "claims": claims,
+        }
