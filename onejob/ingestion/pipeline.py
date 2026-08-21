@@ -527,11 +527,16 @@ class IngestionPipeline:
         # Trust Engine runs after the ingestion
         # transaction has committed. Shadow Mode
         # must never roll back successful ingestion.
-        self.trust.shadow_evaluate_after_ingestion(
-            result.canonical_job_ids
-        )
+        self._verify_after_commit(result.canonical_job_ids)
 
         return result
+
+    def _verify_after_commit(self, canonical_job_ids) -> None:
+        # Verification/trust evaluation runs strictly after ingestion has
+        # committed so a downstream failure cannot roll back durable raw
+        # evidence. A system failure here surfaces to the caller; it never
+        # silently downgrades to a legacy publish.
+        self.trust.shadow_evaluate_after_ingestion(canonical_job_ids)
 
     def collect_many(self, collection_jobs):
         results = []
