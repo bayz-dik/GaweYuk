@@ -355,3 +355,141 @@ def resolve_entity(
             warnings=[f"resolver error: {type(exc).__name__}"],
             method="resolver",
         )
+
+
+# ---------------------------------------------------------------------------
+# Value relationship classification + duplicate detection
+# ---------------------------------------------------------------------------
+
+import hashlib
+
+from onejob.career_twin.ontology import Cardinality, predicate_spec
+
+
+class ValueRelationship(str, Enum):
+    IDENTICAL = "IDENTICAL"
+    EQUIVALENT = "EQUIVALENT"
+    COMPATIBLE = "COMPATIBLE"
+    MORE_SPECIFIC = "MORE_SPECIFIC"
+    LESS_SPECIFIC = "LESS_SPECIFIC"
+    CONFLICTING = "CONFLICTING"
+    UNRELATED = "UNRELATED"
+    UNKNOWN = "UNKNOWN"
+
+
+def _is_skill_predicate(predicate: Predicate) -> bool:
+    return predicate in (Predicate.SKILL_NAME,)
+
+
+def _normalized_comparable(predicate: Predicate, value: object) -> str | None:
+    text = _normalize_text(value)
+    if text is None:
+        return None
+    if _is_skill_predicate(predicate):
+        return _canonical_skill(text)
+    return text
+
+
+def normalized_value_fingerprint(
+    predicate: Predicate,
+    value: object,
+) -> str:
+    """Deterministic fingerprint over (predicate, normalized value).
+
+    Skill predicates canonicalize known aliases so equivalent values share a
+    fingerprint. The predicate is part of the hash so identical text under
+    different predicates does not collide.
+    """
+    normalized = _normalized_comparable(predicate, value)
+    payload = f"{predicate.value}\x1f{normalized if normalized is not None else ''}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _specificity_relation(current: str, proposed: str) -> ValueRelationship | None:
+    """Detect token-superset specificity between two normalized strings."""
+    if current == proposed:
+        return None
+    c_tokens = current.split()
+    p_tokens = proposed.split()
+    c_set = set(c_tokens)
+    p_set = set(p_tokens)
+    if c_set and c_set < p_set:
+        return ValueRelationship.MORE_SPECIFIC
+    if p_set and p_set < c_set:
+        return ValueRelationship.LESS_SPECIFIC
+    return None
+
+
+def classify_value_relationship(
+    predicate: Predicate,
+    *,
+    current: object,
+    proposed: object,
+) -> ValueRelationship:
+    """Classify a proposed value against the current canonical value.
+
+    Consults ontology cardinality: on cardinality-MANY predicates two distinct
+    values coexist (COMPATIBLE) rather than conflict; on cardinality-ONE they
+    conflict. MORE_SPECIFIC is advisory and never implies identity.
+    """
+    spec = predicate_spec(predicate)
+
+    if current is None or proposed is None:
+        return ValueRelationship.UNKNOWN
+
+    c_norm = _normalized_comparable(predicate, current)
+    p_norm = _normalized_comparable(predicate, proposed)
+
+    if c_norm is None or p_norm is None:
+        return ValueRelationship.UNKNOWN
+
+    # Identical: same raw text (after strip) -> exact.
+    if str(current).strip() == str(proposed).strip():
+        return ValueRelationship.IDENTICAL
+
+    # Equivalent: differ only by normalization/alias.
+    if c_norm == p_norm:
+        return ValueRelationship.EQUIVALENT
+
+    specificity = _specificity_relation(c_norm, p_norm)
+    if specificity is not None:
+        return specificity
+
+    if spec.cardinality is Cardinality.MANY:
+        # Distinct values on a MANY predicate coexist.
+        return ValueRelationship.COMPATIBLE
+
+    # Cardinality-ONE with distinct, non-equivalent, non-specificity values.
+    return ValueRelationship.CONFLICTING
+
+
+def is_duplicate(
+    *,
+    resolved_entity_id_a: str | None,
+    predicate_a: Predicate,
+    value_a: object,
+    resolved_entity_id_b: str | None,
+    predicate_b: Predicate,
+    value_b: object,
+) -> bool:
+    """A duplicate requires the same resolved entity + predicate + value.
+
+    Source duplication or text similarity alone is never enough. Unresolved
+    entities cannot be asserted duplicates.
+    """
+    if resolved_entity_id_a is None or resolved_entity_id_b is None:
+        return False
+    if resolved_entity_id_a != resolved_entity_id_b:
+        return False
+    if predicate_a != predicate_b:
+        return False
+
+    relationship = classify_value_relationship(
+        predicate_a,
+        current=value_a,
+        proposed=value_b,
+    )
+    return relationship in (
+        ValueRelationship.IDENTICAL,
+        ValueRelationship.EQUIVALENT,
+    )
