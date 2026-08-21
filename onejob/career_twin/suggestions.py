@@ -125,6 +125,12 @@ def transition(
                 decision=DecisionState.APPROVED,
                 disposition=Disposition.READY,
             )
+        if action is SuggestionAction.EDIT_AND_ACCEPT:
+            # Approving a ready proposal with a user edit is still an approval.
+            return SuggestionState(
+                decision=DecisionState.APPROVED,
+                disposition=Disposition.READY,
+            )
         if action is SuggestionAction.REJECT:
             return SuggestionState(
                 decision=DecisionState.REJECTED,
