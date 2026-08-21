@@ -300,12 +300,18 @@ def test_ingestion_pipeline_owns_trust_service():
 
 
 def test_collect_one_contains_post_transaction_shadow_hook():
-    source = inspect.getsource(
-        IngestionPipeline.collect_one
-    )
+    # collect_one must trigger post-commit verification with the collected
+    # canonical ids. Slice 4A routes the Trust Engine shadow evaluation through
+    # the post-commit verification path, so assert both the trigger in
+    # collect_one and that the shadow hook remains on the verification path.
+    collect_source = inspect.getsource(IngestionPipeline.collect_one)
+    verify_source = inspect.getsource(IngestionPipeline._verify_after_commit)
+    run_trust_source = inspect.getsource(IngestionPipeline._run_trust_engine)
 
-    assert "shadow_evaluate_after_ingestion" in source
-    assert "result.canonical_job_ids" in source
+    assert "_verify_after_commit" in collect_source
+    assert "result.canonical_job_ids" in collect_source
+    assert "shadow_evaluate_after_ingestion" in run_trust_source
+    assert "_run_trust_engine" in verify_source
 
 
 def test_shadow_failure_does_not_raise_into_ingestion_caller():

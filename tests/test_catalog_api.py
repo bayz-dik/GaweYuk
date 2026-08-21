@@ -244,3 +244,40 @@ def test_internal_stale_review_returns_409(tmp_path):
     )
     assert response.status_code == 409
     assert response.json()["detail"]["error_code"] == "STALE_REVIEW_CONTEXT"
+
+
+# ---------------------------------------------------------------------------
+# Pre-PR fix: catalog initialization must be fail-visible, not swallowed
+# ---------------------------------------------------------------------------
+
+def test_catalog_router_factory_surfaces_init_error_type():
+    # A catalog initialization failure must be a deterministic, safe error and
+    # must never silently fall back to unverified data. The factory raises a
+    # CatalogUnavailable that the app layer maps to a fail-closed 503.
+    from onejob.catalog.api import CatalogUnavailable, create_catalog_router
+
+    class _BrokenDatabase:
+        def connection(self):
+            raise RuntimeError("db handle broken: /secret/internal/path")
+
+    with pytest.raises(CatalogUnavailable):
+        create_catalog_router(_BrokenDatabase(), verify_ready=True)
+
+
+def test_catalog_unavailable_returns_safe_503(tmp_path):
+    from onejob.catalog.api import CatalogUnavailable, mount_catalog_or_503
+
+    app = FastAPI()
+
+    def failing_factory():
+        raise CatalogUnavailable("internal detail /secret/path")
+
+    mount_catalog_or_503(app, failing_factory)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get("/api/catalog/jobs")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["detail"]["error_code"] == "CATALOG_UNAVAILABLE"
+    # No internal path/stack leakage.
+    assert "/secret" not in str(body)
