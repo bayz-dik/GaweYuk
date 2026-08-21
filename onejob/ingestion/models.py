@@ -44,6 +44,9 @@ class RawJobObservation(BaseModel):
     skills: list[str] = Field(default_factory=list)
     contact_email: Optional[str] = None
     apply_url: Optional[str] = None
+    # Declared upstream evidence-family lineage. A syndicated mirror sets this
+    # to the origin family so corroboration counts the upstream origin once.
+    upstream_family_hint: Optional[str] = None
     source_payload_hash: str
     raw_payload_reference: Optional[str] = None
 

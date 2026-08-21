@@ -39,7 +39,10 @@ from onejob.job_verification.policy import (
     PublicationPolicy,
     PublicationState,
 )
-from onejob.job_verification.models import ApplyDestinationStatus
+from onejob.job_verification.models import (
+    ApplyDestinationAssessment,
+    ApplyDestinationStatus,
+)
 from onejob.job_verification.production_store import (
     ProductionVerificationStore,
 )
@@ -78,6 +81,9 @@ class IngestionResult:
     canonical_job_ids: list[str] = field(
         default_factory=list
     )
+    # Observations whose canonical identity was AMBIGUOUS. They are preserved
+    # with provenance and routed to review instead of being merged.
+    ambiguous_observation_ids: list[str] = field(default_factory=list)
 
 
 class _UnregisteredSourcePolicy:
@@ -98,6 +104,8 @@ class IngestionPipeline:
         db,
         *,
         destination_status_by_job=None,
+        destination_verifier=None,
+        destination_fetcher=None,
         recruitment_stage: RecruitmentStage = RecruitmentStage.APPLICATION,
     ):
         self.db = db
@@ -114,6 +122,11 @@ class IngestionPipeline:
         self.trust_repo = TrustRepository()
         self.verification_repo = VerificationRepository()
         self.publication_policy = PublicationPolicy()
+        # Destination verification is injected so tests never touch the network.
+        # Without a verifier the boundary fails closed to UNKNOWN; a non-empty
+        # URL is never treated as verified.
+        self.destination_verifier = destination_verifier
+        self.destination_fetcher = destination_fetcher
         self._destination_status_by_job = destination_status_by_job or {}
         self._recruitment_stage = recruitment_stage
 
@@ -273,6 +286,134 @@ class IngestionPipeline:
             ),
         )
 
+    def _resolve_identity(
+        self,
+        conn,
+        *,
+        observation,
+        company_id: str,
+        provisional_job_id: str,
+    ):
+        """Run the tri-state resolver against existing candidates.
+
+        An authoritative source + external requisition id is a strong key. When
+        several same-company candidates are plausible the resolver returns
+        AMBIGUOUS and the caller must not merge.
+        """
+        # An exact provisional-key hit is the same requisition family.
+        rows = conn.execute(
+            """
+            SELECT cj.canonical_job_id, cj.company_id, cj.title, cj.location,
+                   cj.description, cj.employment_type
+            FROM canonical_jobs cj
+            WHERE cj.company_id = ?
+            """,
+            (company_id,),
+        ).fetchall()
+
+        authoritative_ids = {
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT canonical_job_id FROM job_source_appearances
+                WHERE external_id = ?
+                """,
+                (observation.external_id,),
+            ).fetchall()
+        }
+
+        existing_candidates = tuple(
+            JobIdentityCandidate(
+                canonical_job_id=row[0],
+                company_id=row[1],
+                source_id=observation.source_key,
+                external_id=observation.external_id,
+                authoritative_external_id=row[0] in authoritative_ids,
+                title=row[2],
+                location=row[3],
+                description=row[4] or "",
+                employment_type=row[5],
+            )
+            for row in rows
+        )
+
+        incoming = JobIdentityCandidate(
+            canonical_job_id=None,
+            company_id=company_id,
+            source_id=observation.source_key,
+            external_id=observation.external_id,
+            authoritative_external_id=True,
+            title=observation.title,
+            location=observation.location_text,
+            description=observation.description,
+            employment_type=observation.employment_type,
+        )
+
+        return self.entity_resolver.resolve(
+            incoming=incoming, existing=existing_candidates
+        )
+
+    def _hold_ambiguous_observation(
+        self,
+        conn,
+        *,
+        observation,
+        company_id: str,
+        reason_codes,
+    ) -> None:
+        """Preserve an ambiguous observation without merging it.
+
+        Raw observation + provenance stay durable and a possible-duplicate
+        review case is opened so a human can resolve the identity.
+        """
+        registered_source = self.sources.get_by_key(conn, observation.source_key)
+        source_id = (
+            registered_source.source_id
+            if registered_source is not None
+            else observation.source_key
+        )
+        evidence_family_id = derive_evidence_family_id(
+            source_id=source_id,
+            external_id=observation.external_id,
+            upstream_family_hint=observation.upstream_family_hint,
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO observation_provenance (
+                observation_id, source_id, evidence_family_id, apply_url,
+                recorded_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                observation.observation_id,
+                source_id,
+                evidence_family_id,
+                observation.apply_url,
+                observation.observed_at.isoformat(),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO verification_cases (
+                case_id, canonical_job_id, verification_id, reason_codes_json,
+                priority, state, opened_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"case-ambiguous-{observation.observation_id}",
+                f"unresolved:{observation.observation_id}",
+                f"unresolved:{observation.observation_id}",
+                _json(
+                    ["AMBIGUOUS_JOB_IDENTITY", *list(reason_codes)]
+                ),
+                "LOW",
+                "OPEN",
+                observation.observed_at.isoformat(),
+            ),
+        )
+
     def collect_one(self, collector, target) -> IngestionResult:
         batch = collector.collect(target)
         result = IngestionResult()
@@ -319,10 +460,38 @@ class IngestionPipeline:
                     ),
                 )
 
-                canonical_job_id = job_identity_key(
+                # Tri-state canonical identity. The legacy key is only a
+                # provisional/compatibility candidate; the resolver decides
+                # SAME / DISTINCT / AMBIGUOUS and AMBIGUOUS never merges.
+                provisional_job_id = job_identity_key(
                     company_id,
                     normalized_title,
                     normalized_location,
+                )
+                decision = self._resolve_identity(
+                    conn,
+                    observation=observation,
+                    company_id=company_id,
+                    provisional_job_id=provisional_job_id,
+                )
+
+                if decision.disposition is JobIdentityDisposition.AMBIGUOUS:
+                    self._hold_ambiguous_observation(
+                        conn,
+                        observation=observation,
+                        company_id=company_id,
+                        reason_codes=decision.reason_codes,
+                    )
+                    result.ambiguous_observation_ids.append(
+                        observation.observation_id
+                    )
+                    continue
+
+                canonical_job_id = (
+                    decision.canonical_job_id
+                    if decision.disposition is JobIdentityDisposition.SAME
+                    and decision.canonical_job_id
+                    else provisional_job_id
                 )
 
                 existing = conn.execute(
@@ -535,7 +704,10 @@ class IngestionPipeline:
                 evidence_family_id = derive_evidence_family_id(
                     source_id=source_id,
                     external_id=observation.external_id,
-                    upstream_family_hint=None,
+                    # A syndicated mirror declares its upstream origin family so
+                    # corroboration counts the shared origin once, no matter how
+                    # many source appearances repeat it.
+                    upstream_family_hint=observation.upstream_family_hint,
                 )
                 self.appearances.upsert_seen(
                     conn,
@@ -587,6 +759,9 @@ class IngestionPipeline:
                 batch.collector_version,
                 batch.started_at.isoformat(),
                 batch.finished_at.isoformat(),
+                # Observation ids keep runs distinct when a fixture collector
+                # reports identical start/finish timestamps.
+                *sorted(o.observation_id for o in batch.observations),
             )
 
             conn.execute(
@@ -688,13 +863,15 @@ class IngestionPipeline:
 
     def _verify_and_publish(self, canonical_job_ids, apply_url_by_job) -> None:
         now = datetime.now(timezone.utc)
+        assessments = self._assess_destinations(apply_url_by_job, now=now)
         destination_status = dict(self._destination_status_by_job)
         destination_status.update(
-            self._assess_destinations(apply_url_by_job)
+            {job_id: item[0] for job_id, item in assessments.items()}
         )
         store = ProductionVerificationStore(
             self.db,
             destination_status_by_job=destination_status,
+            destination_assessments=assessments,
             now=now,
         )
         verification = JobVerificationService(self.db, store=store, now_default=now)
@@ -732,26 +909,135 @@ class IngestionPipeline:
         destinations = dict(self._destination_status_by_job)
         if destination_status:
             destinations.update(destination_status)
+
+        apply_url = self._latest_apply_url(canonical_job_id)
+        assessments = self._assess_destinations(
+            {canonical_job_id: apply_url}, now=now
+        )
+        if canonical_job_id not in destinations and assessments:
+            destinations[canonical_job_id] = assessments[canonical_job_id][0]
+
         store = ProductionVerificationStore(
-            self.db, destination_status_by_job=destinations, now=now
+            self.db,
+            destination_status_by_job=destinations,
+            destination_assessments=assessments,
+            now=now,
         )
         verification = JobVerificationService(self.db, store=store, now_default=now)
         self._publish_one(verification, canonical_job_id, now)
 
-    def _assess_destinations(self, apply_url_by_job):
-        # Default apply destinations to VERIFIED when the ATS-hosted URL shares
-        # the source domain; otherwise leave UNKNOWN so policy requires review.
-        # Real redirect verification is exercised by DestinationVerifier tests;
-        # here we avoid live fetches.
-        statuses = {}
+    def _latest_apply_url(self, canonical_job_id: str) -> str | None:
+        with self.db.connection() as conn:
+            row = conn.execute(
+                "SELECT apply_url FROM job_source_appearances "
+                "WHERE canonical_job_id = ? AND apply_url IS NOT NULL "
+                "ORDER BY last_seen_at DESC LIMIT 1",
+                (canonical_job_id,),
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def _assess_destinations(self, apply_url_by_job, *, now):
+        """Verify apply destinations through the injected DestinationVerifier.
+
+        A non-empty URL is never treated as verified. Without an injected
+        verifier the boundary fails closed to UNKNOWN. Each assessment is
+        persisted immutably and bound to the verification snapshot so the
+        catalog can only expose the destination that was actually verified.
+        """
+        assessments: dict[str, tuple] = {}
+
         for canonical_job_id, apply_url in apply_url_by_job.items():
             if canonical_job_id in self._destination_status_by_job:
                 continue
-            if apply_url:
-                statuses[canonical_job_id] = ApplyDestinationStatus.VERIFIED
+
+            if apply_url is None:
+                assessment = ApplyDestinationAssessment(
+                    original_apply_url=None,
+                    resolved_apply_url=None,
+                    resolved_domain=None,
+                    redirect_chain_fingerprint=None,
+                    destination_status=ApplyDestinationStatus.UNKNOWN,
+                    reason_codes=("NO_APPLY_URL",),
+                )
+            elif self.destination_verifier is None:
+                # Fail closed: an unassessed URL stays UNKNOWN.
+                assessment = ApplyDestinationAssessment(
+                    original_apply_url=apply_url,
+                    resolved_apply_url=None,
+                    resolved_domain=None,
+                    redirect_chain_fingerprint=None,
+                    destination_status=ApplyDestinationStatus.UNKNOWN,
+                    reason_codes=("DESTINATION_NOT_ASSESSED",),
+                )
             else:
-                statuses[canonical_job_id] = ApplyDestinationStatus.UNKNOWN
-        return statuses
+                allowed_domains = self._allowed_domains_for(canonical_job_id)
+                fetcher = self.destination_fetcher or (lambda url: [url])
+                try:
+                    assessment = self.destination_verifier.verify(
+                        apply_url,
+                        allowed_domains=allowed_domains,
+                        fetcher=fetcher,
+                    )
+                except Exception:
+                    # Verifier failure is a system failure, not verification.
+                    assessment = ApplyDestinationAssessment(
+                        original_apply_url=apply_url,
+                        resolved_apply_url=None,
+                        resolved_domain=None,
+                        redirect_chain_fingerprint=None,
+                        destination_status=ApplyDestinationStatus.UNKNOWN,
+                        reason_codes=("DESTINATION_VERIFIER_FAILED",),
+                    )
+
+            assessment_id = f"dest-{uuid4().hex}"
+            with self.db.transaction() as conn:
+                self.verification_repo.append_destination_assessment(
+                    conn,
+                    assessment_id=assessment_id,
+                    canonical_job_id=canonical_job_id,
+                    assessment=assessment,
+                    assessed_at=now,
+                )
+            assessments[canonical_job_id] = (
+                assessment.destination_status,
+                assessment_id,
+                assessment.resolved_domain,
+            )
+
+        return assessments
+
+    def _allowed_domains_for(self, canonical_job_id: str) -> tuple[str, ...]:
+        # Only registry-declared source domains and verified company career/ATS
+        # domains may yield VERIFIED. Everything else is at most external.
+        domains: list[str] = []
+        with self.db.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT js.primary_domain
+                FROM job_source_appearances a
+                JOIN job_sources js ON js.source_id = a.source_id
+                WHERE a.canonical_job_id = ? AND js.primary_domain IS NOT NULL
+                """,
+                (canonical_job_id,),
+            ).fetchall()
+            domains.extend(row[0] for row in rows)
+
+            identity_rows = conn.execute(
+                """
+                SELECT n.value
+                FROM canonical_jobs cj
+                JOIN company_identity_relationships r
+                    ON r.company_id = cj.company_id
+                JOIN company_identity_nodes n ON n.node_id = r.node_id
+                WHERE cj.canonical_job_id = ?
+                  AND r.status = 'VERIFIED'
+                  AND n.node_type IN ('CAREER_DOMAIN', 'DOMAIN')
+                """,
+                (canonical_job_id,),
+            ).fetchall()
+            domains.extend(row[0] for row in identity_rows)
+
+        return tuple(sorted({d for d in domains if d}))
 
     def _source_policy_for(self, canonical_job_id: str):
         with self.db.connection() as conn:
