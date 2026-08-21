@@ -150,3 +150,28 @@ CREATE TABLE IF NOT EXISTS job_verification_snapshot_evidence (
     FOREIGN KEY(verification_id)
         REFERENCES job_verification_snapshots(verification_id)
 );
+
+
+-- Task 10: publication decisions (append-only) and current head pointer.
+
+CREATE TABLE IF NOT EXISTS publication_decisions (
+    decision_id TEXT PRIMARY KEY,
+    canonical_job_id TEXT NOT NULL,
+    verification_id TEXT,
+    state TEXT NOT NULL,
+    reason_codes_json TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    valid_until TEXT,
+    policy_version TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_publication_job_time
+ON publication_decisions(canonical_job_id, decided_at DESC);
+
+CREATE TABLE IF NOT EXISTS job_publication_heads (
+    canonical_job_id TEXT PRIMARY KEY,
+    decision_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(decision_id) REFERENCES publication_decisions(decision_id)
+);
