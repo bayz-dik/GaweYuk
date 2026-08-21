@@ -211,3 +211,105 @@ def test_past_snapshot_unchanged_after_new_intent(env):
             conn, v1.resolved_view_id, twin_id="twin-1"
         )
     assert stored.intent_version_id == env.intent_version
+
+
+# ---------------------------------------------------------------------------
+# Task 15: end-to-end acceptance scenario
+# ---------------------------------------------------------------------------
+
+
+def test_full_vertical_slice_acceptance(tmp_path):
+    from onejob.career_context.matching_adapter import (
+        build_evaluation_context,
+        match_with_context,
+    )
+    from onejob.career_context.models import PolicyGateStatus
+    from onejob.career_context.policy import evaluate_policy_gate
+    from onejob.career_context.repositories import CareerContextRepository
+
+    env = Env(tmp_path)
+
+    # user creates Target v1
+    target = env.make_target()
+
+    # user creates Intent v2 (raise min salary) — still internally valid
+    intent_v2 = env.intent.create_version(
+        CreateCareerIntentVersionCommand(
+            actor_id="user-1", twin_id="twin-1", idempotency_key="i2",
+            expected_active_version_id=env.intent_version,
+            statements=[
+                NewIntentStatement(
+                    predicate="COMPENSATION.MIN_SALARY", operator="GTE",
+                    value=7_000_000, strength="HARD_CONSTRAINT", value_type="MONEY",
+                    unknown_policy="REQUIRE_VERIFICATION",
+                )
+            ],
+        ),
+        actor=owner(), now=AT,
+    ).intent_version_id
+
+    # dependent target compatibility revalidated against new active intent
+    results = env.compat.revalidate_for_active_intent(
+        twin_id="twin-1", intent_version_id=intent_v2, at=AT
+    )
+    assert results  # target reassessed
+
+    # re-assert VALID so the target can route under intent v2
+    env.compat.assess(
+        intent_version_id=intent_v2,
+        target_version_id=target.target_version_id,
+        at=AT,
+    )
+
+    # job routed deterministically + resolved + materialized
+    outcome = env.service.resolve(
+        twin_id="twin-1", job=job(salary_min=8_000_000), evaluated_at=AT,
+        selected_target_id=target.target_id,
+    )
+    view = env.service.materialize(outcome)
+    assert view.intent_version_id == intent_v2
+    assert view.target_version_id == target.target_version_id
+
+    # HARD/STRONG/SOFT evaluated; salary satisfied → ELIGIBLE
+    gate = evaluate_policy_gate(view, job(salary_min=8_000_000))
+    assert gate.status is PolicyGateStatus.ELIGIBLE
+
+    # policy outranks similarity: a violating job is BLOCKED even if similar
+    blocked_gate = evaluate_policy_gate(view, job(salary_min=5_000_000))
+    assert blocked_gate.status is PolicyGateStatus.BLOCKED
+    context = build_evaluation_context(
+        twin_projection={}, view=view, assessments=[], policy_gate=blocked_gate,
+    )
+    from onejob.profile import CareerTwin
+
+    result = match_with_context(
+        job(salary_min=5_000_000),
+        CareerTwin(name="B", skills=["forklift"], preferred_roles=["warehouse operator"], preferred_locations=["bekasi"]),
+        context,
+    )
+    assert result.decision != "APPLY"
+
+    # UNKNOWN stays UNKNOWN when salary missing
+    unknown_gate = evaluate_policy_gate(view, job(salary_min=None))
+    assert unknown_gate.status is PolicyGateStatus.REVIEW_REQUIRED
+
+    # later Intent edit does not mutate the past view
+    env.intent.create_version(
+        CreateCareerIntentVersionCommand(
+            actor_id="user-1", twin_id="twin-1", idempotency_key="i3",
+            expected_active_version_id=intent_v2,
+            statements=[
+                NewIntentStatement(
+                    predicate="COMPENSATION.MIN_SALARY", operator="GTE",
+                    value=9_000_000, strength="HARD_CONSTRAINT", value_type="MONEY",
+                    unknown_policy="REQUIRE_VERIFICATION",
+                )
+            ],
+        ),
+        actor=owner(), now=AT,
+    )
+    with env.db.connection() as conn:
+        stored = CareerContextRepository().get_resolved_view(
+            conn, view.resolved_view_id, twin_id="twin-1"
+        )
+    assert stored.intent_version_id == intent_v2  # unchanged
