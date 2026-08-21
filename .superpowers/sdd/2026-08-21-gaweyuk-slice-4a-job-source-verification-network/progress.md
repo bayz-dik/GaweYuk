@@ -51,3 +51,12 @@
 - Fix 3 (vertical tests, head 3a295f5): test_slice4a_vertical.py A/B/C through the real pipeline; catalog fail-closed 503 tests; trust pipeline hook assertion moved to _run_trust_engine/_verify_after_commit.
 - Fix 4 (catalog, head 200a82f): PublicJob.apply_destination (safe, domain only for VERIFIED/ALLOWED_EXTERNAL); create_catalog_router(verify_ready=True) + mount_catalog_or_503 → deterministic 503 CATALOG_UNAVAILABLE, no path/stack leak.
 - Fresh full regression: 661 passed, 1 warning (pre-existing Starlette deprecation).
+
+## PR #5 final security/integration review fixes
+- Critical 1 (head 82884c9): production ingestion calls JobEntityResolver; SAME attaches, DISTINCT creates, AMBIGUOUS holds (raw+provenance preserved, verification_case opened, canonical_job_ids empty for that observation). job_identity_key demoted to provisional candidate.
+- Critical 2 (head 2cb666d): removed auto-VERIFIED shortcut; destinations assessed via injected DestinationVerifier/SafeFetchPolicy with allowed domains from source registry + verified company career/ATS identity nodes; unassessed/verifier-failure -> UNKNOWN (fail closed); unsafe target/redirect -> BLOCKED.
+- Critical 3 (head 2cb666d): apply_destination_assessments table + snapshot columns destination_assessment_id/destination_domain added to migration 007 (branch still unmerged); catalog reads status AND domain from the authorizing snapshot, so a changed appearance URL cannot inherit an old VERIFIED status.
+- Important 4 (head 82884c9): RawJobObservation.upstream_family_hint threaded into derive_evidence_family_id in the real pipeline; 3 appearances from one origin -> independent_family_count=1.
+- Cleanup: removed unused company_id_for/RecruitmentStage imports from ProductionVerificationStore.
+- Tests (head 52cc07d): tests/test_slice4a_production_path.py (12 cases).
+- Fresh full regression: 673 passed, 1 warning.
