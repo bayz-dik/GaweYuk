@@ -80,3 +80,40 @@ CREATE TABLE IF NOT EXISTS observation_provenance (
     FOREIGN KEY(observation_id)
         REFERENCES raw_job_observations(observation_id)
 );
+
+
+-- Task 5: company identity graph and immutable identity snapshots.
+
+CREATE TABLE IF NOT EXISTS company_identity_nodes (
+    node_id TEXT PRIMARY KEY,
+    node_type TEXT NOT NULL,
+    value TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS company_identity_relationships (
+    relationship_id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    relationship_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    verification_method TEXT NOT NULL,
+    evidence_refs_json TEXT NOT NULL,
+    first_verified_at TEXT NOT NULL,
+    last_verified_at TEXT NOT NULL,
+    FOREIGN KEY(node_id) REFERENCES company_identity_nodes(node_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_identity_rel_company
+ON company_identity_relationships(company_id);
+
+CREATE TABLE IF NOT EXISTS company_identity_snapshots (
+    snapshot_id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    input_fingerprint TEXT NOT NULL,
+    reason_codes_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(company_id, input_fingerprint)
+);
