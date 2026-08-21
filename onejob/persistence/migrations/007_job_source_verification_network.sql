@@ -175,3 +175,41 @@ CREATE TABLE IF NOT EXISTS job_publication_heads (
     updated_at TEXT NOT NULL,
     FOREIGN KEY(decision_id) REFERENCES publication_decisions(decision_id)
 );
+
+
+-- Task 11: human verification review queue.
+
+CREATE TABLE IF NOT EXISTS verification_cases (
+    case_id TEXT PRIMARY KEY,
+    canonical_job_id TEXT NOT NULL,
+    verification_id TEXT NOT NULL,
+    reason_codes_json TEXT NOT NULL,
+    priority TEXT NOT NULL,
+    state TEXT NOT NULL,
+    opened_at TEXT NOT NULL,
+    assigned_to TEXT,
+    resolved_at TEXT,
+    resolution_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_verification_cases_state
+ON verification_cases(state, priority);
+
+CREATE TABLE IF NOT EXISTS verification_resolutions (
+    resolution_id TEXT PRIMARY KEY,
+    case_id TEXT NOT NULL,
+    reviewer_id TEXT NOT NULL,
+    evidence_snapshot_id TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    reason_codes_json TEXT NOT NULL,
+    notes TEXT,
+    decided_at TEXT NOT NULL,
+    FOREIGN KEY(case_id) REFERENCES verification_cases(case_id)
+);
+
+CREATE TABLE IF NOT EXISTS verification_review_idempotency (
+    idempotency_key TEXT PRIMARY KEY,
+    request_fingerprint TEXT NOT NULL,
+    resolution_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
