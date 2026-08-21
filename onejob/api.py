@@ -79,7 +79,6 @@ if _trust_db_path:
         app.include_router(create_catalog_router(Database(_trust_db_path)))
     except Exception:
         pass
-
 class AnswerRequest(BaseModel):
     job_id: str
     question: str

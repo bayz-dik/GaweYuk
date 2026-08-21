@@ -160,3 +160,87 @@ def test_catalog_never_leaks_internal_markers(env):
     for blob in (listing, detail, verification):
         assert "SECRET_INTERNAL_EVIDENCE_MARKER" not in blob
         assert "PRIVATE_REVIEW_NOTE" not in blob
+
+
+# ---------------------------------------------------------------------------
+# Task 14: internal source/review API boundary with explicit authorization
+# ---------------------------------------------------------------------------
+
+from onejob.job_sources.api import create_internal_sources_router
+from onejob.job_verification.api import create_internal_review_router
+
+
+def _internal_app(db, *, actor):
+    app = FastAPI()
+    app.include_router(
+        create_internal_sources_router(db, actor_resolver=lambda: actor)
+    )
+    app.include_router(
+        create_internal_review_router(
+            db,
+            actor_resolver=lambda: actor,
+            now_factory=lambda: NOW,
+            reevaluate=lambda job_id, *, now: None,
+        )
+    )
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_internal_review_endpoint_rejects_candidate_actor(tmp_path):
+    db = Database(tmp_path / "internal.db")
+    db.initialize()
+    client = _internal_app(db, actor={"actor_id": "u1", "roles": ["candidate"]})
+    response = client.get("/internal/verification/cases")
+    assert response.status_code in {401, 403}
+
+
+def test_internal_sources_list_requires_operator(tmp_path):
+    db = Database(tmp_path / "internal.db")
+    db.initialize()
+    client = _internal_app(db, actor={"actor_id": "u1", "roles": ["candidate"]})
+    response = client.get("/internal/sources")
+    assert response.status_code in {401, 403}
+
+
+def test_internal_sources_list_allows_operator(tmp_path):
+    db = Database(tmp_path / "internal.db")
+    db.initialize()
+    client = _internal_app(
+        db, actor={"actor_id": "op-1", "roles": ["trust_admin"]}
+    )
+    response = client.get("/internal/sources")
+    assert response.status_code == 200
+
+
+def test_internal_stale_review_returns_409(tmp_path):
+    db = Database(tmp_path / "internal.db")
+    db.initialize()
+    from onejob.job_verification.review import _ReviewRepository
+
+    repo = _ReviewRepository()
+    with db.transaction() as conn:
+        repo.open_case(
+            conn,
+            case_id="case-1",
+            canonical_job_id="job-1",
+            verification_id="verif-1",
+            reason_codes=("AMBIGUOUS_DUPLICATE",),
+            priority="LOW",
+            opened_at=NOW,
+        )
+
+    client = _internal_app(
+        db, actor={"actor_id": "rev-1", "roles": ["job_verifier"]}
+    )
+    # latest verification is verif-1 in store default; send stale expected id
+    response = client.post(
+        "/internal/verification/cases/case-1/resolve",
+        json={
+            "expected_verification_id": "verif-OLD",
+            "idempotency_key": "idem-1",
+            "decision": "VERIFY",
+            "reason_codes": ["MANUAL_CORROBORATION"],
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["error_code"] == "STALE_REVIEW_CONTEXT"
