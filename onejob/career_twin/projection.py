@@ -6,6 +6,10 @@ import json
 from pydantic import BaseModel, ConfigDict, Field
 
 from onejob.career_twin.models import CareerClaim
+from onejob.career_twin.ontology import (
+    Cardinality,
+    predicate_spec,
+)
 from onejob.career_twin.repositories import CareerClaimRepository
 from onejob.persistence.db import Database
 
@@ -58,7 +62,22 @@ class ProjectionService:
                 {},
             )
 
-            entity[claim.predicate.value] = claim.value
+            key = claim.predicate.value
+            spec = predicate_spec(claim.predicate)
+
+            if spec.cardinality is Cardinality.MANY:
+                values = entity.setdefault(key, [])
+
+                if not isinstance(values, list):
+                    raise RuntimeError(
+                        "projection cardinality collision: "
+                        f"{claim.subject_entity_id=} "
+                        f"{key=}"
+                    )
+
+                values.append(claim.value)
+            else:
+                entity[key] = claim.value
 
         return entities
 
@@ -157,3 +176,111 @@ class ProjectionService:
             )
 
             return projection
+
+
+class LegacyCareerTwinProjection:
+    def __init__(self, db: Database):
+        self.db = db
+        self.projections = ProjectionService(db)
+
+    def build(
+        self,
+        twin_id: str,
+        *,
+        legacy_intent_fallback=None,
+    ):
+        from onejob.profile import (
+            CareerTwin,
+            WorkExperience,
+        )
+
+        projection = self.projections.build(twin_id)
+
+        display_name = ""
+        skill_names: dict[str, str] = {}
+        role_names: dict[str, str] = {}
+
+        for entity_id, entity in projection.entities.items():
+            if "PERSON.DISPLAY_NAME" in entity:
+                display_name = str(
+                    entity["PERSON.DISPLAY_NAME"]
+                )
+
+            if "SKILL.NAME" in entity:
+                skill_names[entity_id] = str(
+                    entity["SKILL.NAME"]
+                )
+
+            if "ROLE.NAME" in entity:
+                role_names[entity_id] = str(
+                    entity["ROLE.NAME"]
+                )
+
+        experiences = []
+
+        for entity in projection.entities.values():
+            if "EXPERIENCE.ROLE" not in entity:
+                continue
+
+            role_ref = str(entity["EXPERIENCE.ROLE"])
+
+            skill_refs = entity.get(
+                "EXPERIENCE.SKILL_USED",
+                [],
+            )
+            if not isinstance(skill_refs, list):
+                skill_refs = [skill_refs]
+
+            responsibilities = entity.get(
+                "EXPERIENCE.RESPONSIBILITY",
+                [],
+            )
+            if not isinstance(responsibilities, list):
+                responsibilities = [responsibilities]
+
+            experiences.append(
+                WorkExperience(
+                    title=role_names.get(
+                        role_ref,
+                        role_ref,
+                    ),
+                    months=int(
+                        entity.get(
+                            "EXPERIENCE.DURATION_MONTHS",
+                            0,
+                        )
+                    ),
+                    skills=[
+                        skill_names.get(
+                            str(ref),
+                            str(ref),
+                        )
+                        for ref in skill_refs
+                    ],
+                    responsibilities=[
+                        str(value)
+                        for value in responsibilities
+                    ],
+                )
+            )
+
+        intent = (
+            legacy_intent_fallback
+            if legacy_intent_fallback is not None
+            else CareerTwin(name=display_name)
+        )
+
+        return CareerTwin(
+            name=display_name,
+            skills=sorted(skill_names.values()),
+            experiences=experiences,
+            preferred_roles=list(
+                intent.preferred_roles
+            ),
+            preferred_locations=list(
+                intent.preferred_locations
+            ),
+            policy=intent.policy,
+            expected_salary=intent.expected_salary,
+            available_in_days=intent.available_in_days,
+        )

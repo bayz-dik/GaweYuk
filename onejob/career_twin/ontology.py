@@ -45,7 +45,10 @@ class DisclosureScope(str, Enum):
 class Predicate(str, Enum):
     PERSON_DISPLAY_NAME = "PERSON.DISPLAY_NAME"
 
+    ROLE_NAME = "ROLE.NAME"
+
     EXPERIENCE_ROLE = "EXPERIENCE.ROLE"
+    EXPERIENCE_DURATION_MONTHS = "EXPERIENCE.DURATION_MONTHS"
     EXPERIENCE_ORGANIZATION = "EXPERIENCE.ORGANIZATION"
     EXPERIENCE_START_DATE = "EXPERIENCE.START_DATE"
     EXPERIENCE_END_DATE = "EXPERIENCE.END_DATE"
@@ -122,11 +125,23 @@ _PREDICATES: dict[Predicate, PredicateSpec] = {
         minimum_identity=True,
     ),
 
+    Predicate.ROLE_NAME: _spec(
+        EntityType.ROLE,
+        "TEXT",
+        Cardinality.ONE,
+        minimum_identity=True,
+    ),
+
     Predicate.EXPERIENCE_ROLE: _spec(
         EntityType.EXPERIENCE,
         "ROLE_REF",
         Cardinality.ONE,
         minimum_identity=True,
+    ),
+    Predicate.EXPERIENCE_DURATION_MONTHS: _spec(
+        EntityType.EXPERIENCE,
+        "INTEGER",
+        Cardinality.ONE,
     ),
     Predicate.EXPERIENCE_ORGANIZATION: _spec(
         EntityType.EXPERIENCE,
