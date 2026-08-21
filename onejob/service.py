@@ -17,9 +17,13 @@ class OneJobService:
         repo: DemoRepository,
         *,
         career_twin_query=None,
+        career_context_service=None,
+        has_active_intent=None,
     ):
         self.repo = repo
         self.career_twin_query = career_twin_query
+        self.career_context_service = career_context_service
+        self.has_active_intent = has_active_intent
         self.profile = repo.load_profile()
         self.jobs = deduplicate_jobs([normalize_job(raw) for raw in repo.load_jobs()])
 
@@ -73,6 +77,70 @@ class OneJobService:
 
     def profile_view(self) -> dict:
         return self.profile.model_dump()
+
+    def evaluate_job_contextual(
+        self,
+        job_id: str,
+        *,
+        twin_id: str,
+        evaluated_at,
+        selected_target_id: str | None = None,
+    ) -> dict:
+        """Contextual evaluation path used when a Career Intent exists.
+
+        A contextual subsystem technical failure propagates rather than
+        silently falling back to the legacy matching path.
+        """
+        job = next((j for j in self.jobs if j.id == job_id), None)
+        if job is None:
+            raise KeyError(job_id)
+
+        if self.career_context_service is None:
+            raise CareerTwinQueryNotConfigured(
+                "contextual evaluation requested without a context service"
+            )
+
+        from onejob.career_context.matching_adapter import (
+            build_evaluation_context,
+            match_with_context,
+        )
+        from onejob.career_context.policy import evaluate_policy_gate
+
+        outcome = self.career_context_service.resolve(
+            twin_id=twin_id,
+            job=job,
+            evaluated_at=evaluated_at,
+            selected_target_id=selected_target_id,
+        )
+        if getattr(outcome, "requires_user_selection", False):
+            return {
+                "id": job.id,
+                "scope": "AMBIGUOUS",
+                "requires_user_selection": True,
+                "alternatives": outcome.alternatives,
+            }
+
+        view = self.career_context_service.materialize(outcome)
+        gate = evaluate_policy_gate(view, job)
+        context = build_evaluation_context(
+            twin_projection=self.profile.model_dump(),
+            view=view,
+            assessments=[],
+            policy_gate=gate,
+        )
+        result = match_with_context(job, self.profile, context)
+        return {
+            "id": job.id,
+            "scope": view.scope.value,
+            "resolved_view_id": view.resolved_view_id,
+            "intent_version_id": view.intent_version_id,
+            "target_version_id": view.target_version_id,
+            "policy_gate": result.policy_gate.status.value,
+            "decision": result.decision,
+            "match_score": result.match_score,
+            "strong_tradeoffs": result.strong_tradeoffs,
+            "soft_signals": result.soft_signals,
+        }
 
     def career_twin_view(self) -> dict:
         if self.career_twin_query is None:
